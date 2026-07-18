@@ -15,7 +15,6 @@ function mcp_wc_register_review_abilities(): void {
 	}
 
 	mcp_wc_register_reviews_query();
-	mcp_wc_register_review_update_status();
 }
 
 // ─── Reviews Query ───────────────────────────────────────────────────────────
@@ -23,7 +22,7 @@ function mcp_wc_register_review_abilities(): void {
 function mcp_wc_register_reviews_query(): void {
 	mcp_wc_register_ability( 'woocommerce/reviews-query', array(
 		'label'               => 'Query reviews',
-		'description'         => 'List product reviews with optional filters.',
+		'description'         => 'List product reviews with optional filters, or moderate a review by ID with an action.',
 		'category'            => 'site',
 		'input_schema'        => array(
 			'type'                 => 'object',
@@ -34,6 +33,8 @@ function mcp_wc_register_reviews_query(): void {
 				'rating'     => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 5 ),
 				'page'       => array( 'type' => 'integer', 'default' => 1, 'minimum' => 1 ),
 				'per_page'   => array( 'type' => 'integer', 'default' => 10, 'minimum' => 1, 'maximum' => 100 ),
+				'review_id'  => array( 'type' => 'integer', 'minimum' => 1, 'description' => 'Perform an action on this review ID instead of querying.' ),
+				'action'     => array( 'type' => 'string', 'enum' => array( 'approve', 'hold', 'spam', 'trash' ), 'description' => 'Action to perform.' ),
 			),
 			'additionalProperties' => false,
 		),
@@ -64,6 +65,23 @@ function mcp_wc_register_reviews_query(): void {
 		'execute_callback'    => function ( array $input ): array {
 			if ( ! current_user_can( 'moderate_comments' ) ) {
 				return array( 'error' => 'Permission denied.' );
+			}
+
+			if ( isset( $input['review_id'] ) && isset( $input['action'] ) ) {
+				$review = get_comment( (int) $input['review_id'] );
+				if ( ! $review || 'review' !== $review->comment_type ) {
+					return array( 'error' => 'Review not found.' );
+				}
+				$result = wp_set_comment_status( $review->comment_ID, sanitize_text_field( $input['action'] ), true );
+				if ( ! $result || is_wp_error( $result ) ) {
+					return array( 'error' => is_wp_error( $result ) ? $result->get_error_message() : 'Failed to update review status.' );
+				}
+				return array(
+					'reviews'     => array( mcp_wc_format_review( $review ) ),
+					'total_pages' => 1,
+					'page'        => 1,
+					'per_page'    => 1,
+				);
 			}
 
 			if ( isset( $input['id'] ) ) {
@@ -110,7 +128,7 @@ function mcp_wc_register_reviews_query(): void {
 			return current_user_can( 'moderate_comments' );
 		},
 		'meta'                => array(
-			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
+			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
 		),
 	) );
 }
@@ -127,64 +145,4 @@ function mcp_wc_format_review( \WP_Comment $comment ): array {
 		'review'       => $comment->comment_content,
 		'date_created' => $comment->comment_date_gmt ? gmdate( 'Y-m-d\TH:i:s', strtotime( $comment->comment_date_gmt ) ) : null,
 	);
-}
-
-// ─── Review Update Status ────────────────────────────────────────────────────
-
-function mcp_wc_register_review_update_status(): void {
-	mcp_wc_register_ability( 'woocommerce/review-update-status', array(
-		'label'               => 'Update review status',
-		'description'         => 'Approve, unapprove, spam, or trash a product review.',
-		'category'            => 'site',
-		'input_schema'        => array(
-			'type'                 => 'object',
-			'properties'           => array(
-				'id'     => array( 'type' => 'integer', 'minimum' => 1 ),
-				'status' => array( 'type' => 'string', 'enum' => array( 'approve', 'hold', 'spam', 'trash' ) ),
-			),
-			'required'             => array( 'id', 'status' ),
-			'additionalProperties' => false,
-		),
-		'output_schema'       => array(
-			'type'       => 'object',
-			'properties' => array(
-				'review' => array( 'type' => 'object', 'properties' => array(
-					'id'     => array( 'type' => 'integer' ),
-					'status' => array( 'type' => 'string' ),
-					'rating' => array( 'type' => array( 'integer', 'null' ) ),
-				), 'additionalProperties' => false ),
-			),
-			'additionalProperties' => false,
-		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! current_user_can( 'moderate_comments' ) ) {
-				return array( 'error' => 'Permission denied.' );
-			}
-
-			$review = get_comment( (int) $input['id'] );
-			if ( ! $review || 'review' !== $review->comment_type ) {
-				return array( 'error' => 'Review not found.' );
-			}
-
-			$result = wp_set_comment_status( $review->comment_ID, sanitize_text_field( $input['status'] ), true );
-
-			if ( ! $result || is_wp_error( $result ) ) {
-				return array( 'error' => is_wp_error( $result ) ? $result->get_error_message() : 'Failed to update review status.' );
-			}
-
-			return array(
-				'review' => array(
-					'id'     => (int) $review->comment_ID,
-					'status' => wp_get_comment_status( $review->comment_ID ),
-					'rating' => (int) get_comment_meta( $review->comment_ID, 'rating', true ) ?: null,
-				),
-			);
-		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'moderate_comments' );
-		},
-		'meta'                => array(
-			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
-		),
-	) );
 }

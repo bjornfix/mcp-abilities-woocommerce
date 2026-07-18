@@ -17,7 +17,6 @@ function mcp_wc_register_order_abilities(): void {
 	mcp_wc_register_orders_query();
 	mcp_wc_register_order_create();
 	mcp_wc_register_order_update_status();
-	mcp_wc_register_order_add_note();
 	mcp_wc_register_order_delete();
 	mcp_wc_register_order_refunds_query();
 	mcp_wc_register_order_refund_create();
@@ -260,22 +259,24 @@ function mcp_wc_register_order_create(): void {
 function mcp_wc_register_order_update_status(): void {
 	mcp_wc_register_ability( 'woocommerce-mcp/order-update-status', array(
 		'label'               => 'Update order status',
-		'description'         => 'Update an order status.',
+		'description'         => 'Update an order status with optional note. Use status "note-only" to add a note without changing the status.',
 		'category'            => 'site',
 		'input_schema'        => array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'id'     => array( 'type' => 'integer', 'minimum' => 1 ),
-				'status' => array( 'type' => 'string', 'enum' => mcp_wc_allowed_order_statuses() ),
-				'note'   => array( 'type' => 'string', 'description' => 'Optional status change note.' ),
+				'id'            => array( 'type' => 'integer', 'minimum' => 1 ),
+				'status'        => array( 'type' => 'string', 'description' => 'New order status. Use "note-only" to add a note without changing the status.' ),
+				'note'          => array( 'type' => 'string', 'description' => 'Optional status change note.' ),
+				'customer_note' => array( 'type' => 'boolean', 'default' => false, 'description' => 'Make the note visible to the customer.' ),
 			),
-			'required'             => array( 'id', 'status' ),
+			'required'             => array( 'id' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
 			'type'       => 'object',
 			'properties' => array(
-				'order' => mcp_wc_order_output_schema(),
+				'order'   => mcp_wc_order_output_schema(),
+				'note_id' => array( 'type' => 'integer' ),
 			),
 			'additionalProperties' => false,
 		),
@@ -284,9 +285,22 @@ function mcp_wc_register_order_update_status(): void {
 			if ( ! $result['success'] ) { return $result; }
 
 			$order  = $result['order'];
-			$status = sanitize_text_field( $input['status'] );
+			$note   = isset( $input['note'] ) ? sanitize_textarea_field( $input['note'] ) : '';
 
-			$note = isset( $input['note'] ) ? sanitize_textarea_field( $input['note'] ) : '';
+			if ( isset( $input['status'] ) && 'note-only' === $input['status'] ) {
+				if ( '' === $note ) {
+					return array( 'success' => false, 'message' => 'A note is required when using status "note-only".' );
+				}
+				$customer_note = (bool) ( $input['customer_note'] ?? false );
+				$note_id       = $order->add_order_note( $note, $customer_note ? 1 : 0, false );
+				return array( 'note_id' => $note_id, 'order' => mcp_wc_format_order( $order, true ) );
+			}
+
+			if ( ! isset( $input['status'] ) ) {
+				return array( 'success' => false, 'message' => 'Status is required (or use "note-only" to add a note without changing status).' );
+			}
+
+			$status = sanitize_text_field( $input['status'] );
 			$order->update_status( $status, '' !== $note ? $note : '' );
 
 			return array( 'order' => mcp_wc_format_order( $order, true ) );
@@ -296,50 +310,6 @@ function mcp_wc_register_order_update_status(): void {
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
-		),
-	) );
-}
-
-// ─── Order Add Note ──────────────────────────────────────────────────────────
-
-function mcp_wc_register_order_add_note(): void {
-	mcp_wc_register_ability( 'woocommerce-mcp/order-add-note', array(
-		'label'               => 'Add order note',
-		'description'         => 'Add a note to an order.',
-		'category'            => 'site',
-		'input_schema'        => array(
-			'type'                 => 'object',
-			'properties'           => array(
-				'id'            => array( 'type' => 'integer', 'minimum' => 1 ),
-				'note'          => array( 'type' => 'string', 'minLength' => 1, 'pattern' => '\\S' ),
-				'customer_note' => array( 'type' => 'boolean', 'default' => false ),
-			),
-			'required'             => array( 'id', 'note' ),
-			'additionalProperties' => false,
-		),
-		'output_schema'       => array(
-			'type'       => 'object',
-			'properties' => array(
-				'note_id' => array( 'type' => 'integer' ),
-				'order'   => mcp_wc_order_output_schema(),
-			),
-			'additionalProperties' => false,
-		),
-		'execute_callback'    => function ( array $input ): array {
-			$result = mcp_wc_get_order_or_error( (int) $input['id'], 'add notes to' );
-			if ( ! $result['success'] ) { return $result; }
-
-			$order         = $result['order'];
-			$customer_note = (bool) ( $input['customer_note'] ?? false );
-			$note_id       = $order->add_order_note( sanitize_textarea_field( $input['note'] ), $customer_note ? 1 : 0, false );
-
-			return array( 'note_id' => $note_id, 'order' => mcp_wc_format_order( $order, true ) );
-		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_shop_orders' );
-		},
-		'meta'                => array(
-			'annotations' => array( 'readonly' => false, 'destructive' => false, 'idempotent' => false ),
 		),
 	) );
 }

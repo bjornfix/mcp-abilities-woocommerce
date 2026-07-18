@@ -4,7 +4,7 @@ Tags: woocommerce, mcp, api, automation, ecommerce
 Requires at least: 6.9
 Tested up to: 7.0
 Requires PHP: 8.0
-Stable tag: 1.1.0
+Stable tag: 1.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -22,7 +22,7 @@ This add-on plugin extends the MCP ecosystem with comprehensive WooCommerce func
 = Abilities Included =
 
 **Products & Catalog**
-* `woocommerce/products-query` - Find products by ID, search, SKU, status, type, stock status, category, or tag
+* `woocommerce/products-query` - Find products by ID, search, SKU, status, type, stock status, low stock, category, or tag
 * `woocommerce/product-create` - Create any product type (physical, virtual, digital, affiliate, grouped)
 * `woocommerce/product-update` - Update product fields, prices, stock, categories, tags, and metadata
 * `woocommerce/product-delete` - Delete or trash a product
@@ -64,7 +64,6 @@ This add-on plugin extends the MCP ecosystem with comprehensive WooCommerce func
 * `woocommerce/sales-overview` - Sales, orders, items, tax, shipping, refunds, customers
 * `woocommerce/product-report` - Top products by items sold or revenue
 * `woocommerce/customer-report` - Top customers by total spent or order count
-* `woocommerce/stock-report` - Stock status overview with low stock filter
 
 **Settings & Infrastructure**
 * `woocommerce/store-settings` - General store settings, currency, address, countries
@@ -75,8 +74,7 @@ This add-on plugin extends the MCP ecosystem with comprehensive WooCommerce func
 * `woocommerce/webhooks-query` - List WooCommerce webhooks
 
 **Reviews**
-* `woocommerce/reviews-query` - List product reviews by product, status, or rating
-* `woocommerce/review-update-status` - Approve, unapprove, spam, or trash a review
+* `woocommerce/reviews-query` - List product reviews by product, status, or rating, or moderate a review by ID
 
 = Use Cases =
 

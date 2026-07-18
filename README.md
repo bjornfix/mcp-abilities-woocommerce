@@ -107,11 +107,10 @@ Without this plugin, managing a WooCommerce store requires logging into `/wp-adm
 | `woocommerce/customer-report` | Top customers |
 | `woocommerce/stock-report` | Stock status overview |
 
-**Reviews (2)**
+**Reviews (1)**
 | Ability | Description |
 |---|---|
-| `woocommerce/reviews-query` | List product reviews |
-| `woocommerce/review-update-status` | Moderate a review |
+| `woocommerce/reviews-query` | List product reviews or moderate a review |
 
 **Settings & Infrastructure (6)**
 | Ability | Description |

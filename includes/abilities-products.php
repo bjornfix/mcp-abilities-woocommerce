@@ -95,6 +95,7 @@ function mcp_wc_register_products_query(): void {
 				'stock_status'      => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
 				'category_id'       => array( 'type' => 'integer', 'description' => 'Filter by product category ID.' ),
 				'tag_id'            => array( 'type' => 'integer', 'description' => 'Filter by product tag ID.' ),
+				'low_stock'         => array( 'type' => 'boolean', 'description' => 'Only return products with low stock (manage_stock=true and quantity below threshold).' ),
 				'page'              => array( 'type' => 'integer', 'default' => 1, 'minimum' => 1 ),
 				'per_page'          => array( 'type' => 'integer', 'default' => 10, 'minimum' => 1, 'maximum' => 100 ),
 			),
@@ -152,6 +153,9 @@ function mcp_wc_register_products_query(): void {
 			}
 			if ( ! empty( $input['tag_id'] ) ) {
 				$args['tag'] = array( (int) $input['tag_id'] );
+			}
+			if ( ! empty( $input['low_stock'] ) ) {
+				$args['low_in_stock'] = true;
 			}
 
 			$product_type_alias = $input['product_type_alias'] ?? null;

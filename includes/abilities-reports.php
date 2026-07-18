@@ -17,7 +17,6 @@ function mcp_wc_register_report_abilities(): void {
 	mcp_wc_register_sales_overview();
 	mcp_wc_register_product_report();
 	mcp_wc_register_customer_report();
-	mcp_wc_register_stock_report();
 }
 
 function mcp_wc_report_permission(): bool {
@@ -344,88 +343,4 @@ function mcp_wc_register_customer_report(): void {
 	) );
 }
 
-// ─── Stock Report ────────────────────────────────────────────────────────────
 
-function mcp_wc_register_stock_report(): void {
-	mcp_wc_register_ability( 'woocommerce/stock-report', array(
-		'label'               => 'Stock report',
-		'description'         => 'Get stock status overview.',
-		'category'            => 'site',
-		'input_schema'        => array(
-			'type'                 => 'object',
-			'properties'           => array(
-				'stock_status' => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ), 'description' => 'Filter by stock status.' ),
-				'low_stock'    => array( 'type' => 'boolean', 'description' => 'Only return products with low stock.' ),
-				'page'         => array( 'type' => 'integer', 'default' => 1, 'minimum' => 1 ),
-				'per_page'     => array( 'type' => 'integer', 'default' => 25, 'minimum' => 1, 'maximum' => 100 ),
-			),
-			'additionalProperties' => false,
-		),
-		'output_schema'       => array(
-			'type'       => 'object',
-			'properties' => array(
-				'products'    => array( 'type' => 'array', 'items' => array(
-					'type'       => 'object',
-					'properties' => array(
-						'id'             => array( 'type' => 'integer' ),
-						'name'           => array( 'type' => 'string' ),
-						'sku'            => array( 'type' => 'string' ),
-						'stock_status'   => array( 'type' => 'string' ),
-						'stock_quantity' => array( 'type' => array( 'integer', 'null' ) ),
-						'manage_stock'   => array( 'type' => 'boolean' ),
-					),
-					'additionalProperties' => false,
-				) ),
-				'total_pages' => array( 'type' => 'integer' ),
-				'page'        => array( 'type' => 'integer' ),
-				'per_page'    => array( 'type' => 'integer' ),
-			),
-			'additionalProperties' => false,
-		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! mcp_wc_report_permission() ) {
-				return array( 'error' => 'Permission denied.' );
-			}
-
-			$page     = (int) ( $input['page'] ?? 1 );
-			$per_page = min( 100, max( 1, (int) ( $input['per_page'] ?? 25 ) ) );
-			$args     = array(
-				'status'   => 'publish',
-				'page'     => $page,
-				'limit'    => $per_page,
-				'paginate' => true,
-			);
-
-			if ( ! empty( $input['stock_status'] ) ) {
-				$args['stock_status'] = sanitize_text_field( $input['stock_status'] );
-			}
-			if ( ! empty( $input['low_stock'] ) ) {
-				$args['low_in_stock'] = true;
-			}
-
-			$results  = wc_get_products( $args );
-			$products = array();
-			foreach ( $results->products as $product ) {
-				$products[] = array(
-					'id'             => $product->get_id(),
-					'name'           => $product->get_name(),
-					'sku'            => $product->get_sku(),
-					'stock_status'   => $product->get_stock_status(),
-					'stock_quantity' => $product->get_manage_stock() ? $product->get_stock_quantity() : null,
-					'manage_stock'   => $product->get_manage_stock(),
-				);
-			}
-
-			return array(
-				'products'    => $products,
-				'total_pages' => (int) $results->max_num_pages,
-				'page'        => $page,
-				'per_page'    => $per_page,
-			);
-		},
-		'permission_callback' => 'mcp_wc_report_permission',
-		'meta'                => array(
-			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
-		),
-	) );
-}
