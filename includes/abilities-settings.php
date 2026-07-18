@@ -1081,26 +1081,23 @@ function mcp_wc_register_rest_api_keys_query(): void {
 				return array( 'error' => 'Permission denied.' );
 			}
 
-			global $wpdb;
+            if ( isset( $input['id'] ) ) {
+                $keys = mcp_wc_get_api_keys_from_db();
+                foreach ( $keys as $key ) {
+                    if ( (int) $key->key_id === (int) $input['id'] ) {
+                        return array( 'keys' => array( mcp_wc_format_api_key( $key ) ) );
+                    }
+                }
+                return array( 'keys' => array() );
+            }
 
-			if ( isset( $input['id'] ) ) {
-				$key = $wpdb->get_row( $wpdb->prepare(
-					"SELECT * FROM {$wpdb->prefix}woocommerce_api_keys WHERE key_id = %d",
-					(int) $input['id']
-				) );
-				if ( ! $key ) {
-					return array( 'keys' => array() );
-				}
-				return array( 'keys' => array( mcp_wc_format_api_key( $key ) ) );
-			}
+            $keys  = mcp_wc_get_api_keys_from_db();
+            $items = array();
+            foreach ( $keys as $key ) {
+                $items[] = mcp_wc_format_api_key( $key );
+            }
 
-			$keys = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}woocommerce_api_keys ORDER BY key_id DESC" );
-			$items = array();
-			foreach ( $keys as $key ) {
-				$items[] = mcp_wc_format_api_key( $key );
-			}
-
-			return array( 'keys' => $items );
+            return array( 'keys' => $items );
 		},
 		'permission_callback' => 'mcp_wc_settings_permission',
 		'meta'                => array(
@@ -1123,6 +1120,22 @@ function mcp_wc_format_api_key( $key ): array {
 		'consumer_key' => $key->consumer_key,
 		'last_access'  => $last_access,
 	);
+}
+
+function mcp_wc_get_api_keys_from_db(): array {
+	global $wpdb;
+	$cache_key = 'mcp_wc_api_keys';
+	$cached    = wp_cache_get( $cache_key, 'mcp-abilities-for-woocommerce' );
+	if ( false !== $cached ) {
+		return $cached;
+	}
+	$keys = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}woocommerce_api_keys ORDER BY key_id DESC" );
+	wp_cache_set( $cache_key, $keys, 'mcp-abilities-for-woocommerce', 300 );
+	return $keys;
+}
+
+function mcp_wc_clear_api_keys_cache(): void {
+	wp_cache_delete( 'mcp_wc_api_keys', 'mcp-abilities-for-woocommerce' );
 }
 
 function mcp_wc_register_rest_api_key_create(): void {
@@ -1160,28 +1173,33 @@ function mcp_wc_register_rest_api_key_create(): void {
 			$consumer_key    = 'ck_' . wc_rand_hash();
 			$consumer_secret = 'cs_' . wc_rand_hash();
 
-			$result = $wpdb->insert(
-				$wpdb->prefix . 'woocommerce_api_keys',
-				array(
-					'user_id'         => $user_id,
-					'description'     => $description,
-					'permissions'     => $permissions,
-					'consumer_key'    => wc_api_hash( $consumer_key ),
-					'consumer_secret' => $consumer_secret,
-					'truncated_key'   => substr( $consumer_key, -7 ),
-				),
-				array( '%d', '%s', '%s', '%s', '%s', '%s' )
-			);
+            $result = $wpdb->insert(
+                $wpdb->prefix . 'woocommerce_api_keys',
+                array(
+                    'user_id'         => $user_id,
+                    'description'     => $description,
+                    'permissions'     => $permissions,
+                    'consumer_key'    => wc_api_hash( $consumer_key ),
+                    'consumer_secret' => $consumer_secret,
+                    'truncated_key'   => substr( $consumer_key, -7 ),
+                ),
+                array( '%d', '%s', '%s', '%s', '%s', '%s' )
+            );
 
-			if ( ! $result ) {
-				return array( 'error' => 'Failed to create API key.' );
-			}
+            if ( ! $result ) {
+                return array( 'error' => 'Failed to create API key.' );
+            }
 
-			$key_id  = $wpdb->insert_id;
-			$key_row = $wpdb->get_row( $wpdb->prepare(
-				"SELECT * FROM {$wpdb->prefix}woocommerce_api_keys WHERE key_id = %d",
-				$key_id
-			) );
+            mcp_wc_clear_api_keys_cache();
+            $key_id  = $wpdb->insert_id;
+            $keys    = mcp_wc_get_api_keys_from_db();
+            $key_row = null;
+            foreach ( $keys as $k ) {
+                if ( (int) $k->key_id === (int) $key_id ) {
+                    $key_row = $k;
+                    break;
+                }
+            }
 
 			$data = mcp_wc_format_api_key( $key_row );
 			$data['consumer_secret'] = $consumer_secret;
@@ -1221,17 +1239,21 @@ function mcp_wc_register_rest_api_key_delete(): void {
 				return array( 'error' => 'Permission denied.' );
 			}
 
-			global $wpdb;
-			$result = $wpdb->delete(
-				$wpdb->prefix . 'woocommerce_api_keys',
-				array( 'key_id' => (int) $input['id'] ),
-				array( '%d' )
-			);
+            global $wpdb;
+            $result = $wpdb->delete(
+                $wpdb->prefix . 'woocommerce_api_keys',
+                array( 'key_id' => (int) $input['id'] ),
+                array( '%d' )
+            );
 
-			return array(
-				'deleted' => (bool) $result,
-				'id'      => (int) $input['id'],
-			);
+            if ( $result ) {
+                mcp_wc_clear_api_keys_cache();
+            }
+
+            return array(
+                'deleted' => (bool) $result,
+                'id'      => (int) $input['id'],
+            );
 		},
 		'permission_callback' => 'mcp_wc_settings_permission',
 		'meta'                => array(
