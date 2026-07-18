@@ -941,33 +941,24 @@ function mcp_wc_register_system_tool_run(): void {
 
 			$tool_id = sanitize_text_field( $input['id'] );
 
-			// Use WC_Admin_Status directly instead of the REST controller
-			$tools_controller = new \WC_REST_System_Status_Tools_Controller();
-			$tools = $tools_controller->get_items( new \WP_REST_Request() )->get_data();
-
-			$found = false;
-			foreach ( $tools as $tool ) {
-				if ( $tool['id'] === $tool_id ) {
-					$found = true;
-					break;
-				}
+			if ( ! class_exists( 'WC_REST_System_Status_Tools_Controller' ) ) {
+				require_once WC_ABSPATH . 'includes/rest-api/Controllers/Version3/class-wc-rest-system-status-tools-controller.php';
 			}
 
-			if ( ! $found ) {
-				return array( 'success' => false, 'message' => 'Tool not found: ' . $tool_id );
+			$request = new \WP_REST_Request( 'POST', '/wc/v3/system_status/tools/' . $tool_id . '/execute' );
+			$request->set_url_params( array( 'id' => $tool_id ) );
+
+			$controller = new \WC_REST_System_Status_Tools_Controller();
+			$response   = $controller->execute_tool( $request );
+
+			if ( is_wp_error( $response ) ) {
+				return array( 'success' => false, 'message' => $response->get_error_message() );
 			}
 
-			// Execute via WC's admin tool execution function
-			if ( ! class_exists( 'WC_Admin_Status' ) ) {
-				require_once WC_ABSPATH . 'includes/admin/class-wc-admin-status.php';
-			}
-
-			\WC_Admin_Status::maybe_run_tool_action( $tool_id );
-			$messages = \WC_Admin_Status::run_tool_action( $tool_id );
-
+			$data = $response->get_data();
 			return array(
-				'success' => true,
-				'message' => is_array( $messages ) ? implode( '; ', $messages ) : (string) $messages,
+				'success' => ! empty( $data['success'] ),
+				'message' => $data['message'] ?? '',
 			);
 		},
 		'permission_callback' => 'mcp_wc_settings_permission',
