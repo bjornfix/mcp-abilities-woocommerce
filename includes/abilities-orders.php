@@ -22,6 +22,7 @@ function mcp_wc_register_order_abilities(): void {
 	mcp_wc_register_order_refund_create();
 	mcp_wc_register_order_notes_query();
 	mcp_wc_register_order_items_update();
+	mcp_wc_register_order_resend_email();
 }
 
 function mcp_wc_get_order_or_error( int $id, string $action ): array {
@@ -807,6 +808,67 @@ function mcp_wc_register_order_items_update(): void {
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
+		),
+	) );
+}
+
+// ─── Order Resend Email ─────────────────────────────────────────────────────
+
+function mcp_wc_register_order_resend_email(): void {
+	mcp_wc_register_ability( 'woocommerce/order-resend-email', array(
+		'label'               => 'Resend order email',
+		'description'         => 'Resend a WooCommerce order notification email (processing, completed, customer_invoice, etc.).',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'order_id' => array( 'type' => 'integer', 'minimum' => 1 ),
+				'type'     => array( 'type' => 'string', 'description' => 'Email type. Common: customer_processing_order, customer_completed_order, customer_invoice, customer_refunded_order, customer_note, new_order.' ),
+			),
+			'required'             => array( 'order_id', 'type' ),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'success' => array( 'type' => 'boolean' ),
+				'message' => array( 'type' => 'string' ),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			$result = mcp_wc_get_order_or_error( (int) $input['order_id'], 'send emails for' );
+			if ( ! $result['success'] ) { return $result; }
+
+			$order = $result['order'];
+			$type  = sanitize_text_field( $input['type'] );
+
+			$mailer = WC()->mailer();
+			$emails = $mailer->get_emails();
+			$found  = false;
+
+			foreach ( $emails as $email ) {
+				if ( $email->id === $type ) {
+					$found = true;
+					$email->trigger( $order->get_id(), $order );
+
+					return array(
+						'success' => true,
+						'message' => sprintf( 'Email "%s" sent for order #%d.', $email->get_title(), $order->get_id() ),
+					);
+				}
+			}
+
+			return array(
+				'success' => false,
+				'message' => sprintf( 'Email type "%s" not found. Available: %s', $type, implode( ', ', array_map( function( $e ) { return $e->id; }, $emails ) ) ),
+			);
+		},
+		'permission_callback' => function (): bool {
+			return current_user_can( 'edit_shop_orders' );
+		},
+		'meta'                => array(
+			'annotations' => array( 'readonly' => false, 'destructive' => false, 'idempotent' => false ),
 		),
 	) );
 }

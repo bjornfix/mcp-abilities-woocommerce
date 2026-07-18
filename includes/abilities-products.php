@@ -78,6 +78,8 @@ function mcp_wc_register_product_abilities(): void {
 	mcp_wc_register_attribute_update();
 	mcp_wc_register_attribute_delete();
 	mcp_wc_register_product_meta_query();
+	mcp_wc_register_product_duplicate();
+	mcp_wc_register_products_bulk_stock();
 }
 
 // ─── Products Query ──────────────────────────────────────────────────────────
@@ -2116,5 +2118,138 @@ function mcp_wc_register_product_meta_query(): void {
 			return current_user_can( 'edit_products' );
 		},
 		'meta' => array( 'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ) ),
+	) );
+}
+
+// ─── Product Duplicate ────────────────────────────────────────────────────────
+
+function mcp_wc_register_product_duplicate(): void {
+	mcp_wc_register_ability( 'woocommerce-mcp/product-duplicate', array(
+		'label'               => 'Duplicate product',
+		'description'         => 'Duplicate an existing product with a new name and optional SKU.',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'id'     => array( 'type' => 'integer', 'minimum' => 1 ),
+				'name'   => array( 'type' => 'string', 'description' => 'New product name. Defaults to "Original Name (Copy)".' ),
+				'sku'    => array( 'type' => 'string', 'description' => 'New SKU. Auto-generated if omitted.' ),
+				'status' => array( 'type' => 'string', 'enum' => array( 'draft', 'pending', 'private', 'publish' ), 'default' => 'draft' ),
+			),
+			'required'             => array( 'id' ),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'product' => mcp_wc_product_output_schema(),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			if ( ! current_user_can( 'edit_products' ) ) {
+				return array( 'error' => 'Permission denied.' );
+			}
+
+			$original = wc_get_product( (int) $input['id'] );
+			if ( ! $original ) {
+				return array( 'error' => 'Product not found.' );
+			}
+
+			$duplicate = ( new \WC_Admin_Duplicate_Product() )->product_duplicate( $original );
+
+			if ( isset( $input['name'] ) ) {
+				$duplicate->set_name( sanitize_text_field( $input['name'] ) );
+			}
+			if ( isset( $input['sku'] ) ) {
+				$duplicate->set_sku( sanitize_text_field( $input['sku'] ) );
+			}
+			if ( isset( $input['status'] ) ) {
+				$duplicate->set_status( sanitize_text_field( $input['status'] ) );
+			}
+
+			$duplicate->save();
+
+			return array( 'product' => mcp_wc_format_product( wc_get_product( $duplicate->get_id() ) ) );
+		},
+		'permission_callback' => function (): bool {
+			return current_user_can( 'edit_products' );
+		},
+		'meta'                => array(
+			'annotations' => array( 'readonly' => false, 'destructive' => false, 'idempotent' => false ),
+		),
+	) );
+}
+
+// ─── Products Bulk Stock ──────────────────────────────────────────────────────
+
+function mcp_wc_register_products_bulk_stock(): void {
+	mcp_wc_register_ability( 'woocommerce-mcp/products-bulk-stock', array(
+		'label'               => 'Bulk stock update',
+		'description'         => 'Update stock quantities for multiple products at once.',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'products' => array( 'type' => 'array', 'items' => array(
+					'type'       => 'object',
+					'properties' => array(
+						'id'             => array( 'type' => 'integer', 'minimum' => 1 ),
+						'stock_quantity' => array( 'type' => 'integer' ),
+						'stock_status'   => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
+						'manage_stock'   => array( 'type' => 'boolean' ),
+					),
+					'required'   => array( 'id' ),
+					'additionalProperties' => false,
+				) ),
+			),
+			'required'             => array( 'products' ),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'updated' => array( 'type' => 'integer' ),
+				'errors'  => array( 'type' => 'array', 'items' => array( 'type' => 'object' ) ),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			if ( ! current_user_can( 'edit_products' ) ) {
+				return array( 'error' => 'Permission denied.' );
+			}
+
+			$updated = 0;
+			$errors  = array();
+
+			foreach ( $input['products'] as $item ) {
+				$product = wc_get_product( (int) $item['id'] );
+				if ( ! $product ) {
+					$errors[] = array( 'id' => (int) $item['id'], 'error' => 'Product not found.' );
+					continue;
+				}
+
+				if ( isset( $item['manage_stock'] ) ) {
+					$product->set_manage_stock( (bool) $item['manage_stock'] );
+				}
+				if ( isset( $item['stock_quantity'] ) && $product->get_manage_stock() ) {
+					$product->set_stock_quantity( (int) $item['stock_quantity'] );
+				}
+				if ( isset( $item['stock_status'] ) ) {
+					$product->set_stock_status( sanitize_text_field( $item['stock_status'] ) );
+				}
+
+				$product->save();
+				++$updated;
+			}
+
+			return array( 'updated' => $updated, 'errors' => $errors );
+		},
+		'permission_callback' => function (): bool {
+			return current_user_can( 'edit_products' );
+		},
+		'meta'                => array(
+			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
+		),
 	) );
 }

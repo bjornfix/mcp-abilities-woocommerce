@@ -25,6 +25,13 @@ function mcp_wc_register_setting_abilities(): void {
 	mcp_wc_register_webhook_create();
 	mcp_wc_register_webhook_update();
 	mcp_wc_register_webhook_delete();
+	mcp_wc_register_system_status();
+	mcp_wc_register_system_tools_query();
+	mcp_wc_register_system_tool_run();
+	mcp_wc_register_email_settings();
+	mcp_wc_register_rest_api_keys_query();
+	mcp_wc_register_rest_api_key_create();
+	mcp_wc_register_rest_api_key_delete();
 }
 
 function mcp_wc_settings_permission(): bool {
@@ -765,6 +772,470 @@ function mcp_wc_register_tax_classes_query(): void {
 		'permission_callback' => 'mcp_wc_settings_permission',
 		'meta'                => array(
 			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
+		),
+	) );
+}
+
+// ─── System Status ───────────────────────────────────────────────────────────
+
+function mcp_wc_register_system_status(): void {
+	mcp_wc_register_ability( 'woocommerce/system-status', array(
+		'label'               => 'System status',
+		'description'         => 'Get the WooCommerce system status report with environment, database, and plugin information.',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'section' => array( 'type' => 'string', 'description' => 'Specific section: environment, database, active_plugins, theme, settings, security, pages. Leave empty for all.' ),
+			),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'environment'      => array( 'type' => 'object', 'additionalProperties' => true ),
+				'database'         => array( 'type' => 'object', 'additionalProperties' => true ),
+				'active_plugins'   => array( 'type' => 'array', 'items' => array( 'type' => 'object' ) ),
+				'theme'            => array( 'type' => 'object', 'additionalProperties' => true ),
+				'settings'         => array( 'type' => 'object', 'additionalProperties' => true ),
+				'security'         => array( 'type' => 'object', 'additionalProperties' => true ),
+				'pages'            => array( 'type' => 'array', 'items' => array( 'type' => 'object' ) ),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			if ( ! mcp_wc_settings_permission() ) {
+				return array( 'error' => 'Permission denied.' );
+			}
+
+			if ( ! class_exists( 'WC_REST_System_Status_Controller' ) ) {
+				require_once WC_ABSPATH . 'includes/rest-api/Controllers/Version3/class-wc-rest-system-status-controller.php';
+			}
+
+			$controller = new \WC_REST_System_Status_Controller();
+			$response   = array();
+
+			if ( empty( $input['section'] ) || 'environment' === $input['section'] ) {
+				$env = $controller->get_environment_info();
+				$response['environment'] = $env->get_data();
+			}
+			if ( empty( $input['section'] ) || 'database' === $input['section'] ) {
+				$db = $controller->get_database_info();
+				$response['database'] = $db->get_data();
+			}
+			if ( empty( $input['section'] ) || 'active_plugins' === $input['section'] ) {
+				$ap = $controller->get_active_plugins();
+				$response['active_plugins'] = $ap->get_data();
+			}
+			if ( empty( $input['section'] ) || 'theme' === $input['section'] ) {
+				$th = $controller->get_theme_info();
+				$response['theme'] = $th->get_data();
+			}
+			if ( empty( $input['section'] ) || 'settings' === $input['section'] ) {
+				$st = $controller->get_settings();
+				$response['settings'] = $st->get_data();
+			}
+			if ( empty( $input['section'] ) || 'security' === $input['section'] ) {
+				$se = $controller->get_security_info();
+				$response['security'] = $se->get_data();
+			}
+			if ( empty( $input['section'] ) || 'pages' === $input['section'] ) {
+				$pg = $controller->get_pages();
+				$response['pages'] = $pg->get_data();
+			}
+
+			return $response;
+		},
+		'permission_callback' => 'mcp_wc_settings_permission',
+		'meta'                => array(
+			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
+		),
+	) );
+}
+
+// ─── System Tools ────────────────────────────────────────────────────────────
+
+function mcp_wc_register_system_tools_query(): void {
+	mcp_wc_register_ability( 'woocommerce/system-tools-query', array(
+		'label'               => 'Query system tools',
+		'description'         => 'List available WooCommerce system tools.',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'tools' => array( 'type' => 'array', 'items' => array(
+					'type'       => 'object',
+					'properties' => array(
+						'id'          => array( 'type' => 'string' ),
+						'name'        => array( 'type' => 'string' ),
+						'description' => array( 'type' => 'string' ),
+						'action'      => array( 'type' => 'string' ),
+					),
+					'additionalProperties' => false,
+				) ),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			if ( ! mcp_wc_settings_permission() ) {
+				return array( 'error' => 'Permission denied.' );
+			}
+
+			if ( ! class_exists( 'WC_REST_System_Status_Tools_Controller' ) ) {
+				require_once WC_ABSPATH . 'includes/rest-api/Controllers/Version3/class-wc-rest-system-status-tools-controller.php';
+			}
+
+			$controller = new \WC_REST_System_Status_Tools_Controller();
+			$tools_data = $controller->get_items( new \WP_REST_Request() );
+			$tools      = array();
+
+			foreach ( $tools_data->get_data() as $tool ) {
+				$tools[] = array(
+					'id'          => $tool['id'],
+					'name'        => $tool['name'],
+					'description' => $tool['description'],
+					'action'      => $tool['action'],
+				);
+			}
+
+			return array( 'tools' => $tools );
+		},
+		'permission_callback' => 'mcp_wc_settings_permission',
+		'meta'                => array(
+			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
+		),
+	) );
+}
+
+function mcp_wc_register_system_tool_run(): void {
+	mcp_wc_register_ability( 'woocommerce/system-tool-run', array(
+		'label'               => 'Run system tool',
+		'description'         => 'Execute a WooCommerce system tool by ID.',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'id' => array( 'type' => 'string', 'description' => 'Tool ID from system-tools-query.' ),
+			),
+			'required'             => array( 'id' ),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'success'  => array( 'type' => 'boolean' ),
+				'message'  => array( 'type' => 'string' ),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			if ( ! mcp_wc_settings_permission() ) {
+				return array( 'error' => 'Permission denied.' );
+			}
+
+			if ( ! class_exists( 'WC_REST_System_Status_Tools_Controller' ) ) {
+				require_once WC_ABSPATH . 'includes/rest-api/Controllers/Version3/class-wc-rest-system-status-tools-controller.php';
+			}
+
+			$request = new \WP_REST_Request( 'PUT', '' );
+			$request->set_param( 'id', sanitize_text_field( $input['id'] ) );
+
+			$controller = new \WC_REST_System_Status_Tools_Controller();
+			$response   = $controller->execute_tool( $request );
+
+			if ( is_wp_error( $response ) ) {
+				return array( 'success' => false, 'message' => $response->get_error_message() );
+			}
+
+			$data = $response->get_data();
+			return array(
+				'success' => ! empty( $data['success'] ),
+				'message' => $data['message'] ?? '',
+			);
+		},
+		'permission_callback' => 'mcp_wc_settings_permission',
+		'meta'                => array(
+			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
+		),
+	) );
+}
+
+// ─── Email Settings ──────────────────────────────────────────────────────────
+
+function mcp_wc_register_email_settings(): void {
+	mcp_wc_register_ability( 'woocommerce/email-settings', array(
+		'label'               => 'Get email settings',
+		'description'         => 'Get WooCommerce email configuration and notification settings.',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'mailer'                => array( 'type' => 'object', 'additionalProperties' => true ),
+				'from_name'             => array( 'type' => 'string' ),
+				'from_address'          => array( 'type' => 'string' ),
+				'header_image'          => array( 'type' => 'string' ),
+				'footer_text'           => array( 'type' => 'string' ),
+				'base_color'            => array( 'type' => 'string' ),
+				'background_color'      => array( 'type' => 'string' ),
+				'body_background_color' => array( 'type' => 'string' ),
+				'body_text_color'       => array( 'type' => 'string' ),
+				'emails'                => array( 'type' => 'array', 'items' => array(
+					'type'       => 'object',
+					'properties' => array(
+						'id'          => array( 'type' => 'string' ),
+						'title'       => array( 'type' => 'string' ),
+						'description' => array( 'type' => 'string' ),
+						'enabled'     => array( 'type' => 'string' ),
+						'recipient'   => array( 'type' => 'string' ),
+						'subject'     => array( 'type' => 'string' ),
+					),
+					'additionalProperties' => false,
+				) ),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			if ( ! mcp_wc_settings_permission() ) {
+				return array( 'error' => 'Permission denied.' );
+			}
+
+			$mailer          = WC()->mailer();
+			$email_templates = $mailer->get_emails();
+
+			$emails = array();
+			foreach ( $email_templates as $email ) {
+				$emails[] = array(
+					'id'          => $email->id,
+					'title'       => $email->get_title(),
+					'description' => $email->get_description(),
+					'enabled'     => $email->is_enabled() ? 'yes' : 'no',
+					'recipient'   => $email->get_recipient(),
+					'subject'     => $email->get_subject(),
+				);
+			}
+
+			return array(
+				'mailer'                => array( 'enabled' => true ),
+				'from_name'             => get_option( 'woocommerce_email_from_name', '' ),
+				'from_address'          => get_option( 'woocommerce_email_from_address', '' ),
+				'header_image'          => get_option( 'woocommerce_email_header_image', '' ),
+				'footer_text'           => get_option( 'woocommerce_email_footer_text', '' ),
+				'base_color'            => get_option( 'woocommerce_email_base_color', '' ),
+				'background_color'      => get_option( 'woocommerce_email_background_color', '' ),
+				'body_background_color' => get_option( 'woocommerce_email_body_background_color', '' ),
+				'body_text_color'       => get_option( 'woocommerce_email_body_text_color', '' ),
+				'emails'                => $emails,
+			);
+		},
+		'permission_callback' => 'mcp_wc_settings_permission',
+		'meta'                => array(
+			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
+		),
+	) );
+}
+
+// ─── REST API Keys ───────────────────────────────────────────────────────────
+
+function mcp_wc_register_rest_api_keys_query(): void {
+	mcp_wc_register_ability( 'woocommerce/rest-api-keys-query', array(
+		'label'               => 'Query API keys',
+		'description'         => 'List WooCommerce REST API keys.',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'id' => array( 'type' => 'integer', 'minimum' => 1 ),
+			),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'keys' => array( 'type' => 'array', 'items' => array(
+					'type'       => 'object',
+					'properties' => array(
+						'key_id'       => array( 'type' => 'integer' ),
+						'user_id'      => array( 'type' => 'integer' ),
+						'description'  => array( 'type' => 'string' ),
+						'permissions'  => array( 'type' => 'string' ),
+						'consumer_key' => array( 'type' => 'string' ),
+						'last_access'  => array( 'type' => array( 'string', 'null' ), 'format' => 'date-time' ),
+					),
+					'additionalProperties' => false,
+				) ),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			if ( ! mcp_wc_settings_permission() ) {
+				return array( 'error' => 'Permission denied.' );
+			}
+
+			global $wpdb;
+
+			if ( isset( $input['id'] ) ) {
+				$key = $wpdb->get_row( $wpdb->prepare(
+					"SELECT * FROM {$wpdb->prefix}woocommerce_api_keys WHERE key_id = %d",
+					(int) $input['id']
+				) );
+				if ( ! $key ) {
+					return array( 'keys' => array() );
+				}
+				return array( 'keys' => array( mcp_wc_format_api_key( $key ) ) );
+			}
+
+			$keys = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}woocommerce_api_keys ORDER BY key_id DESC" );
+			$items = array();
+			foreach ( $keys as $key ) {
+				$items[] = mcp_wc_format_api_key( $key );
+			}
+
+			return array( 'keys' => $items );
+		},
+		'permission_callback' => 'mcp_wc_settings_permission',
+		'meta'                => array(
+			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
+		),
+	) );
+}
+
+function mcp_wc_format_api_key( $key ): array {
+	$last_access = null;
+	if ( ! empty( $key->last_access ) ) {
+		$last_access = gmdate( 'Y-m-d\TH:i:s', strtotime( $key->last_access ) );
+	}
+
+	return array(
+		'key_id'       => (int) $key->key_id,
+		'user_id'      => (int) $key->user_id,
+		'description'  => $key->description,
+		'permissions'  => $key->permissions,
+		'consumer_key' => $key->consumer_key,
+		'last_access'  => $last_access,
+	);
+}
+
+function mcp_wc_register_rest_api_key_create(): void {
+	mcp_wc_register_ability( 'woocommerce/rest-api-key-create', array(
+		'label'               => 'Create API key',
+		'description'         => 'Create a new WooCommerce REST API key.',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'description' => array( 'type' => 'string' ),
+				'user_id'     => array( 'type' => 'integer', 'description' => 'WordPress user ID. Defaults to current user.' ),
+				'permissions' => array( 'type' => 'string', 'enum' => array( 'read', 'write', 'read_write' ), 'default' => 'read_write' ),
+			),
+			'required'             => array( 'description' ),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'key' => array( 'type' => 'object' ),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			if ( ! mcp_wc_settings_permission() ) {
+				return array( 'error' => 'Permission denied.' );
+			}
+
+			global $wpdb;
+
+			$user_id     = isset( $input['user_id'] ) ? (int) $input['user_id'] : get_current_user_id();
+			$description = sanitize_text_field( $input['description'] );
+			$permissions = sanitize_text_field( $input['permissions'] ?? 'read_write' );
+			$consumer_key    = 'ck_' . wc_rand_hash();
+			$consumer_secret = 'cs_' . wc_rand_hash();
+
+			$result = $wpdb->insert(
+				$wpdb->prefix . 'woocommerce_api_keys',
+				array(
+					'user_id'         => $user_id,
+					'description'     => $description,
+					'permissions'     => $permissions,
+					'consumer_key'    => wc_api_hash( $consumer_key ),
+					'consumer_secret' => $consumer_secret,
+					'truncated_key'   => substr( $consumer_key, -7 ),
+				),
+				array( '%d', '%s', '%s', '%s', '%s', '%s' )
+			);
+
+			if ( ! $result ) {
+				return array( 'error' => 'Failed to create API key.' );
+			}
+
+			$key_id  = $wpdb->insert_id;
+			$key_row = $wpdb->get_row( $wpdb->prepare(
+				"SELECT * FROM {$wpdb->prefix}woocommerce_api_keys WHERE key_id = %d",
+				$key_id
+			) );
+
+			$data = mcp_wc_format_api_key( $key_row );
+			$data['consumer_secret'] = $consumer_secret;
+
+			return array( 'key' => $data );
+		},
+		'permission_callback' => 'mcp_wc_settings_permission',
+		'meta'                => array(
+			'annotations' => array( 'readonly' => false, 'destructive' => false, 'idempotent' => false ),
+		),
+	) );
+}
+
+function mcp_wc_register_rest_api_key_delete(): void {
+	mcp_wc_register_ability( 'woocommerce/rest-api-key-delete', array(
+		'label'               => 'Delete API key',
+		'description'         => 'Delete a WooCommerce REST API key.',
+		'category'            => 'site',
+		'input_schema'        => array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'id' => array( 'type' => 'integer', 'minimum' => 1 ),
+			),
+			'required'             => array( 'id' ),
+			'additionalProperties' => false,
+		),
+		'output_schema'       => array(
+			'type'       => 'object',
+			'properties' => array(
+				'deleted' => array( 'type' => 'boolean' ),
+				'id'      => array( 'type' => 'integer' ),
+			),
+			'additionalProperties' => false,
+		),
+		'execute_callback'    => function ( array $input ): array {
+			if ( ! mcp_wc_settings_permission() ) {
+				return array( 'error' => 'Permission denied.' );
+			}
+
+			global $wpdb;
+			$result = $wpdb->delete(
+				$wpdb->prefix . 'woocommerce_api_keys',
+				array( 'key_id' => (int) $input['id'] ),
+				array( '%d' )
+			);
+
+			return array(
+				'deleted' => (bool) $result,
+				'id'      => (int) $input['id'],
+			);
+		},
+		'permission_callback' => 'mcp_wc_settings_permission',
+		'meta'                => array(
+			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => true ),
 		),
 	) );
 }
