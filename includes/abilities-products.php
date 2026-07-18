@@ -314,6 +314,7 @@ function mcp_wc_register_product_create(): void {
 			'additionalProperties' => false,
 		),
 		'execute_callback'    => function ( array $input ): array {
+			try {
 			if ( ! current_user_can( 'edit_products' ) ) {
 				return array( 'error' => 'You do not have permission to create products.' );
 			}
@@ -509,6 +510,9 @@ function mcp_wc_register_product_create(): void {
 
 			$product = wc_get_product( $product_id );
 			return array( 'product' => mcp_wc_format_product( $product ) );
+			} catch ( \Throwable $e ) {
+				return array( 'error' => $e->getMessage() . ' [' . basename($e->getFile()) . ':' . $e->getLine() . ']' );
+			}
 		},
 		'permission_callback' => function (): bool {
 			return current_user_can( 'edit_products' );
@@ -611,6 +615,7 @@ function mcp_wc_register_product_update(): void {
 			'additionalProperties' => false,
 		),
 		'execute_callback'    => function ( array $input ): array {
+			try {
 			$result = mcp_wc_get_product_or_error( (int) $input['id'], 'update' );
 			if ( ! $result['success'] ) {
 				return $result;
@@ -778,6 +783,9 @@ function mcp_wc_register_product_update(): void {
 			}
 
 			return array( 'product' => mcp_wc_format_product( wc_get_product( $product->get_id() ) ) );
+			} catch ( \Throwable $e ) {
+				return array( 'error' => $e->getMessage() . ' [' . basename($e->getFile()) . ':' . $e->getLine() . ']' );
+			}
 		},
 		'permission_callback' => function (): bool {
 			return current_user_can( 'edit_products' );
