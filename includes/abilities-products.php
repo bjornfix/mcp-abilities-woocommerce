@@ -478,7 +478,9 @@ function mcp_wc_register_product_create(): void {
 			$product_id = $product->save();
 
 			// Ensure frontend visibility: WC 10.9 set_catalog_visibility does not reliably persist _visibility meta
-			update_post_meta( $product_id, '_visibility', sanitize_text_field( $input['catalog_visibility'] ?? 'visible' ) );
+			$visibility = sanitize_text_field( $input['catalog_visibility'] ?? 'visible' );
+			update_post_meta( $product_id, '_visibility', $visibility );
+			wp_set_object_terms( $product_id, array( $visibility ), 'product_visibility' );
 
 			if ( isset( $input['category_ids'] ) && is_array( $input['category_ids'] ) ) {
 				wp_set_object_terms( $product_id, array_map( 'absint', $input['category_ids'] ), 'product_cat' );
@@ -756,7 +758,9 @@ function mcp_wc_register_product_update(): void {
 
 			// Ensure frontend visibility: WC 10.9 set_catalog_visibility does not reliably persist _visibility meta
 			if ( isset( $input['catalog_visibility'] ) ) {
-				update_post_meta( $product->get_id(), '_visibility', sanitize_text_field( $input['catalog_visibility'] ) );
+				$visibility = sanitize_text_field( $input['catalog_visibility'] );
+				update_post_meta( $product->get_id(), '_visibility', $visibility );
+				wp_set_object_terms( $product->get_id(), array( $visibility ), 'product_visibility' );
 			}
 
 			if ( isset( $input['category_ids'] ) && is_array( $input['category_ids'] ) ) {
