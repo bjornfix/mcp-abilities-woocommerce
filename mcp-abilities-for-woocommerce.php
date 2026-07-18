@@ -3,7 +3,7 @@
  * Plugin Name: MCP Abilities for WooCommerce
  * Plugin URI: https://devenia.com/plugins/mcp-abilities-for-woocommerce/
  * Description: Comprehensive WooCommerce abilities for MCP. Products, orders, coupons, customers, reports, settings, reviews, shipping, tax, and webhooks.
- * Version: 1.0.2
+ * Version: 1.0.3
  * Author: basicus
  * Author URI: https://profiles.wordpress.org/basicus/
  * License: GPL-2.0+
@@ -114,14 +114,8 @@ function mcp_wc_currency_codes(): array {
  * Map agent-facing product type alias to WC product type.
  */
 function mcp_wc_map_product_type_alias( string $alias ): string {
-	return match ( $alias ) {
-		'physical' => 'simple',
-		'virtual' => 'simple',
-		'digital' => 'simple',
-		'affiliate' => 'external',
-		'grouped' => 'grouped',
-		default => $alias,
-	};
+	$aliases = mcp_wc_product_type_aliases();
+	return $aliases[ $alias ] ?? $alias;
 }
 
 /**

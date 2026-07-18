@@ -12,7 +12,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function mcp_wc_product_type_aliases(): array {
-	return array( 'physical', 'virtual', 'digital', 'affiliate', 'grouped' );
+	$aliases = array(
+		'physical'  => 'simple',
+		'virtual'   => 'simple',
+		'digital'   => 'simple',
+		'affiliate' => 'external',
+		'grouped'   => 'grouped',
+		'variable'  => 'variable',
+	);
+	if ( function_exists( 'wc_get_product_types' ) ) {
+		foreach ( array_keys( wc_get_product_types() ) as $type ) {
+			$aliases[ $type ] = $type;
+		}
+	}
+	return $aliases;
 }
 
 function mcp_wc_get_product_or_error( int $id, string $action ): array {
@@ -77,7 +90,7 @@ function mcp_wc_register_products_query(): void {
 				'search'            => array( 'type' => 'string' ),
 				'sku'               => array( 'type' => 'string', 'description' => 'Limit results to products with SKUs that partially match this string.' ),
 				'status'            => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
-				'product_type_alias' => array( 'type' => 'string', 'enum' => mcp_wc_product_type_aliases() ),
+				'product_type_alias' => array( 'type' => 'string', 'enum' => array_keys( mcp_wc_product_type_aliases() ) ),
 				'stock_status'      => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
 				'category_id'       => array( 'type' => 'integer', 'description' => 'Filter by product category ID.' ),
 				'tag_id'            => array( 'type' => 'integer', 'description' => 'Filter by product tag ID.' ),
@@ -202,106 +215,52 @@ function mcp_wc_register_product_create(): void {
 		'description'         => 'Create a product using supported catalog fields.',
 		'category'            => 'site',
 		'input_schema'        => array(
-			'type'  => 'object',
-			'oneOf' => array(
-				array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'product_type_alias' => array(
+					'type'        => 'string',
+					'enum'        => array_keys( mcp_wc_product_type_aliases() ),
+					'default'     => 'physical',
+					'description' => 'Product type. Use the WC type name directly for extension types (subscription, booking, bundle, etc).',
+				),
+				'name'               => array( 'type' => 'string' ),
+				'sku'                => array( 'type' => 'string' ),
+				'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'description'        => array( 'type' => 'string' ),
+				'short_description'  => array( 'type' => 'string' ),
+				'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
+				'manage_stock'       => array( 'type' => 'boolean' ),
+				'stock_quantity'     => array( 'type' => 'integer' ),
+				'stock_status'       => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
+				'virtual'            => array( 'type' => 'boolean' ),
+				'downloadable'       => array( 'type' => 'boolean' ),
+				'catalog_visibility' => array( 'type' => 'string', 'enum' => array( 'visible', 'catalog', 'search', 'hidden' ) ),
+				'weight'             => array( 'type' => 'string' ),
+				'dimensions'         => array( 'type' => 'object', 'properties' => array(
+					'length' => array( 'type' => 'string' ),
+					'width'  => array( 'type' => 'string' ),
+					'height' => array( 'type' => 'string' ),
+				), 'additionalProperties' => false ),
+				'category_ids'       => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
+				'tag_ids'            => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
+				'external_url'       => array( 'type' => 'string', 'format' => 'uri' ),
+				'button_text'        => array( 'type' => 'string' ),
+				'grouped_products'   => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
+				'attributes'         => array( 'type' => 'array', 'items' => array(
 					'type'       => 'object',
 					'properties' => array(
-						'product_type_alias' => array( 'type' => 'string', 'enum' => array( 'physical' ), 'default' => 'physical' ),
-						'name'               => array( 'type' => 'string' ),
-						'sku'                => array( 'type' => 'string' ),
-						'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'description'        => array( 'type' => 'string' ),
-						'short_description'  => array( 'type' => 'string' ),
-						'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
-						'manage_stock'       => array( 'type' => 'boolean' ),
-						'stock_quantity'     => array( 'type' => 'integer' ),
-						'stock_status'       => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
-						'category_ids'       => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ), 'description' => 'Product category IDs.' ),
-						'tag_ids'            => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ), 'description' => 'Product tag IDs.' ),
-						'weight'             => array( 'type' => 'string' ),
-						'dimensions'         => array( 'type' => 'object', 'properties' => array( 'length' => array( 'type' => 'string' ), 'width' => array( 'type' => 'string' ), 'height' => array( 'type' => 'string' ) ), 'additionalProperties' => false ),
+						'name'      => array( 'type' => 'string' ),
+						'value'     => array( 'type' => 'string' ),
+						'visible'   => array( 'type' => 'boolean' ),
+						'variation' => array( 'type' => 'boolean' ),
+						'options'   => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
 					),
-					'required'   => array( 'name' ),
 					'additionalProperties' => false,
-				),
-				array(
-					'type'       => 'object',
-					'properties' => array(
-						'product_type_alias' => array( 'type' => 'string', 'enum' => array( 'virtual' ) ),
-						'name'               => array( 'type' => 'string' ),
-						'sku'                => array( 'type' => 'string' ),
-						'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'description'        => array( 'type' => 'string' ),
-						'short_description'  => array( 'type' => 'string' ),
-						'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
-						'manage_stock'       => array( 'type' => 'boolean' ),
-						'stock_quantity'     => array( 'type' => 'integer' ),
-						'stock_status'       => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
-						'category_ids'       => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-						'tag_ids'            => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-					),
-					'required'   => array( 'name', 'product_type_alias' ),
-					'additionalProperties' => false,
-				),
-				array(
-					'type'       => 'object',
-					'properties' => array(
-						'product_type_alias' => array( 'type' => 'string', 'enum' => array( 'digital' ) ),
-						'name'               => array( 'type' => 'string' ),
-						'sku'                => array( 'type' => 'string' ),
-						'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'description'        => array( 'type' => 'string' ),
-						'short_description'  => array( 'type' => 'string' ),
-						'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
-						'manage_stock'       => array( 'type' => 'boolean' ),
-						'stock_quantity'     => array( 'type' => 'integer' ),
-						'stock_status'       => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
-						'category_ids'       => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-						'tag_ids'            => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-					),
-					'required'   => array( 'name', 'product_type_alias' ),
-					'additionalProperties' => false,
-				),
-				array(
-					'type'       => 'object',
-					'properties' => array(
-						'product_type_alias' => array( 'type' => 'string', 'enum' => array( 'affiliate' ) ),
-						'name'               => array( 'type' => 'string' ),
-						'sku'                => array( 'type' => 'string' ),
-						'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'description'        => array( 'type' => 'string' ),
-						'short_description'  => array( 'type' => 'string' ),
-						'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
-						'external_url'       => array( 'type' => 'string', 'format' => 'uri' ),
-						'button_text'        => array( 'type' => 'string' ),
-						'category_ids'       => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-						'tag_ids'            => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-					),
-					'required'   => array( 'name', 'product_type_alias' ),
-					'additionalProperties' => false,
-				),
-				array(
-					'type'       => 'object',
-					'properties' => array(
-						'product_type_alias' => array( 'type' => 'string', 'enum' => array( 'grouped' ) ),
-						'name'               => array( 'type' => 'string' ),
-						'sku'                => array( 'type' => 'string' ),
-						'description'        => array( 'type' => 'string' ),
-						'short_description'  => array( 'type' => 'string' ),
-						'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
-						'grouped_products'   => array( 'type' => 'array', 'items' => array( 'type' => 'integer', 'minimum' => 1 ) ),
-						'category_ids'       => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-						'tag_ids'            => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-					),
-					'required'   => array( 'name', 'product_type_alias' ),
-					'additionalProperties' => false,
-				),
+				) ),
 			),
+			'required'             => array( 'name' ),
+			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
 			'type'       => 'object',
@@ -315,17 +274,27 @@ function mcp_wc_register_product_create(): void {
 				return array( 'error' => 'You do not have permission to create products.' );
 			}
 
-			$alias = $input['product_type_alias'] ?? 'physical';
-			$type  = mcp_wc_map_product_type_alias( $alias );
+			$alias   = $input['product_type_alias'] ?? 'physical';
+			$wc_type = mcp_wc_map_product_type_alias( $alias );
 
-			$product = new \WC_Product();
-			if ( 'grouped' === $type ) {
-				$product = new \WC_Product_Grouped();
-			} elseif ( 'external' === $type ) {
-				$product = new \WC_Product_External();
-			} elseif ( 'variable' === $type ) {
-				$product = new \WC_Product_Variable();
+			$class_map = array(
+				'simple'   => \WC_Product_Simple::class,
+				'variable' => \WC_Product_Variable::class,
+				'grouped'  => \WC_Product_Grouped::class,
+				'external' => \WC_Product_External::class,
+			);
+
+			if ( isset( $class_map[ $wc_type ] ) ) {
+				$classname = $class_map[ $wc_type ];
+			} else {
+				$classname = 'WC_Product_' . implode( '_', array_map( 'ucfirst', explode( '-', str_replace( '_', '-', $wc_type ) ) ) );
+				if ( ! class_exists( $classname ) ) {
+					$classname = \WC_Product::class;
+				}
 			}
+
+			$product = new $classname();
+
 			$product->set_name( sanitize_text_field( $input['name'] ) );
 
 			if ( isset( $input['sku'] ) ) {
@@ -340,17 +309,18 @@ function mcp_wc_register_product_create(): void {
 			if ( isset( $input['status'] ) ) {
 				$product->set_status( sanitize_text_field( $input['status'] ) );
 			}
-
-			if ( in_array( $type, array( 'simple', 'external' ), true ) ) {
-				if ( isset( $input['regular_price'] ) ) {
-					$product->set_regular_price( sanitize_text_field( $input['regular_price'] ) );
-				}
-				if ( isset( $input['sale_price'] ) ) {
-					$product->set_sale_price( sanitize_text_field( $input['sale_price'] ) );
-				}
+			if ( isset( $input['catalog_visibility'] ) && method_exists( $product, 'set_catalog_visibility' ) ) {
+				$product->set_catalog_visibility( sanitize_text_field( $input['catalog_visibility'] ) );
 			}
 
-			if ( 'simple' === $type ) {
+			if ( isset( $input['regular_price'] ) && method_exists( $product, 'set_regular_price' ) ) {
+				$product->set_regular_price( sanitize_text_field( $input['regular_price'] ) );
+			}
+			if ( isset( $input['sale_price'] ) && method_exists( $product, 'set_sale_price' ) ) {
+				$product->set_sale_price( sanitize_text_field( $input['sale_price'] ) );
+			}
+
+			if ( method_exists( $product, 'set_virtual' ) && method_exists( $product, 'set_downloadable' ) ) {
 				if ( 'virtual' === $alias || 'digital' === $alias ) {
 					$product->set_virtual( true );
 				}
@@ -358,39 +328,69 @@ function mcp_wc_register_product_create(): void {
 					$product->set_downloadable( true );
 				}
 				if ( ! in_array( $alias, array( 'virtual', 'digital' ), true ) ) {
-					$product->set_virtual( false );
-				}
-
-				if ( isset( $input['manage_stock'] ) ) {
-					$product->set_manage_stock( (bool) $input['manage_stock'] );
-				}
-				if ( isset( $input['stock_quantity'] ) ) {
-					$product->set_stock_quantity( (int) $input['stock_quantity'] );
-				}
-				if ( isset( $input['stock_status'] ) ) {
-					$product->set_stock_status( sanitize_text_field( $input['stock_status'] ) );
-				}
-				if ( isset( $input['weight'] ) ) {
-					$product->set_weight( sanitize_text_field( $input['weight'] ) );
-				}
-				if ( isset( $input['dimensions'] ) && is_array( $input['dimensions'] ) ) {
-					$product->set_length( sanitize_text_field( $input['dimensions']['length'] ?? '' ) );
-					$product->set_width( sanitize_text_field( $input['dimensions']['width'] ?? '' ) );
-					$product->set_height( sanitize_text_field( $input['dimensions']['height'] ?? '' ) );
+					if ( isset( $input['virtual'] ) ) {
+						$product->set_virtual( (bool) $input['virtual'] );
+					}
+					if ( isset( $input['downloadable'] ) ) {
+						$product->set_downloadable( (bool) $input['downloadable'] );
+					}
 				}
 			}
 
-			if ( 'external' === $type ) {
-				if ( isset( $input['external_url'] ) ) {
-					$product->set_product_url( esc_url_raw( $input['external_url'] ) );
+			if ( isset( $input['manage_stock'] ) && method_exists( $product, 'set_manage_stock' ) ) {
+				$product->set_manage_stock( (bool) $input['manage_stock'] );
+			}
+			if ( isset( $input['stock_quantity'] ) && method_exists( $product, 'set_stock_quantity' ) ) {
+				$product->set_stock_quantity( (int) $input['stock_quantity'] );
+			}
+			if ( isset( $input['stock_status'] ) && method_exists( $product, 'set_stock_status' ) ) {
+				$product->set_stock_status( sanitize_text_field( $input['stock_status'] ) );
+			}
+
+			if ( isset( $input['weight'] ) && method_exists( $product, 'set_weight' ) ) {
+				$product->set_weight( sanitize_text_field( $input['weight'] ) );
+			}
+			if ( isset( $input['dimensions'] ) && is_array( $input['dimensions'] ) ) {
+				if ( isset( $input['dimensions']['length'] ) && method_exists( $product, 'set_length' ) ) {
+					$product->set_length( sanitize_text_field( $input['dimensions']['length'] ) );
 				}
-				if ( isset( $input['button_text'] ) ) {
-					$product->set_button_text( sanitize_text_field( $input['button_text'] ) );
+				if ( isset( $input['dimensions']['width'] ) && method_exists( $product, 'set_width' ) ) {
+					$product->set_width( sanitize_text_field( $input['dimensions']['width'] ) );
+				}
+				if ( isset( $input['dimensions']['height'] ) && method_exists( $product, 'set_height' ) ) {
+					$product->set_height( sanitize_text_field( $input['dimensions']['height'] ) );
 				}
 			}
 
-			if ( 'grouped' === $type && isset( $input['grouped_products'] ) ) {
+			if ( isset( $input['external_url'] ) && method_exists( $product, 'set_product_url' ) ) {
+				$product->set_product_url( esc_url_raw( $input['external_url'] ) );
+			}
+			if ( isset( $input['button_text'] ) && method_exists( $product, 'set_button_text' ) ) {
+				$product->set_button_text( sanitize_text_field( $input['button_text'] ) );
+			}
+
+			if ( isset( $input['grouped_products'] ) && method_exists( $product, 'set_children' ) ) {
 				$product->set_children( array_map( 'absint', $input['grouped_products'] ) );
+			}
+
+			if ( isset( $input['attributes'] ) && is_array( $input['attributes'] ) && method_exists( $product, 'set_attributes' ) ) {
+				$attrs = array();
+				foreach ( $input['attributes'] as $attr_data ) {
+					if ( ! isset( $attr_data['name'] ) || '' === $attr_data['name'] ) {
+						continue;
+					}
+					$attr = new \WC_Product_Attribute();
+					$attr->set_name( sanitize_text_field( $attr_data['name'] ) );
+					if ( isset( $attr_data['options'] ) && is_array( $attr_data['options'] ) ) {
+						$attr->set_options( array_map( 'sanitize_text_field', $attr_data['options'] ) );
+					} elseif ( isset( $attr_data['value'] ) ) {
+						$attr->set_options( array_map( 'trim', explode( '|', sanitize_text_field( $attr_data['value'] ) ) ) );
+					}
+					$attr->set_visible( isset( $attr_data['visible'] ) ? (bool) $attr_data['visible'] : true );
+					$attr->set_variation( isset( $attr_data['variation'] ) ? (bool) $attr_data['variation'] : false );
+					$attrs[] = $attr;
+				}
+				$product->set_attributes( $attrs );
 			}
 
 			$product_id = $product->save();
@@ -426,57 +426,47 @@ function mcp_wc_register_product_update(): void {
 		'description'         => 'Update an existing product using supported catalog fields.',
 		'category'            => 'site',
 		'input_schema'        => array(
-			'type'  => 'object',
-			'oneOf' => array(
-				array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'id'                 => array( 'type' => 'integer', 'minimum' => 1 ),
+				'name'               => array( 'type' => 'string' ),
+				'sku'                => array( 'type' => 'string' ),
+				'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'description'        => array( 'type' => 'string' ),
+				'short_description'  => array( 'type' => 'string' ),
+				'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
+				'manage_stock'       => array( 'type' => 'boolean' ),
+				'stock_quantity'     => array( 'type' => 'integer' ),
+				'stock_status'       => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
+				'virtual'            => array( 'type' => 'boolean' ),
+				'downloadable'       => array( 'type' => 'boolean' ),
+				'catalog_visibility' => array( 'type' => 'string', 'enum' => array( 'visible', 'catalog', 'search', 'hidden' ) ),
+				'weight'             => array( 'type' => 'string' ),
+				'dimensions'         => array( 'type' => 'object', 'properties' => array(
+					'length' => array( 'type' => 'string' ),
+					'width'  => array( 'type' => 'string' ),
+					'height' => array( 'type' => 'string' ),
+				), 'additionalProperties' => false ),
+				'category_ids'       => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
+				'tag_ids'            => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
+				'external_url'       => array( 'type' => 'string', 'format' => 'uri' ),
+				'button_text'        => array( 'type' => 'string' ),
+				'grouped_products'   => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
+				'attributes'         => array( 'type' => 'array', 'items' => array(
 					'type'       => 'object',
 					'properties' => array(
-						'id'              => array( 'type' => 'integer', 'minimum' => 1 ),
-						'name'            => array( 'type' => 'string' ),
-						'sku'             => array( 'type' => 'string' ),
-						'regular_price'   => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'sale_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'description'     => array( 'type' => 'string' ),
-						'short_description' => array( 'type' => 'string' ),
-						'status'          => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
-						'manage_stock'    => array( 'type' => 'boolean' ),
-						'stock_quantity'  => array( 'type' => 'integer' ),
-						'stock_status'    => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
-						'category_ids'    => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-						'tag_ids'         => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-						'weight'          => array( 'type' => 'string' ),
-						'dimensions'      => array( 'type' => 'object', 'properties' => array( 'length' => array( 'type' => 'string' ), 'width' => array( 'type' => 'string' ), 'height' => array( 'type' => 'string' ) ), 'additionalProperties' => false ),
+						'name'      => array( 'type' => 'string' ),
+						'value'     => array( 'type' => 'string' ),
+						'visible'   => array( 'type' => 'boolean' ),
+						'variation' => array( 'type' => 'boolean' ),
+						'options'   => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
 					),
-					'required'   => array( 'id' ),
 					'additionalProperties' => false,
-				),
-				array(
-					'type'       => 'object',
-					'properties' => array(
-						'id'              => array( 'type' => 'integer', 'minimum' => 1 ),
-						'product_type_alias' => array( 'type' => 'string', 'enum' => array( 'physical', 'virtual', 'digital', 'affiliate', 'grouped' ) ),
-						'name'            => array( 'type' => 'string' ),
-						'sku'             => array( 'type' => 'string' ),
-						'regular_price'   => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'sale_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-						'description'     => array( 'type' => 'string' ),
-						'short_description' => array( 'type' => 'string' ),
-						'status'          => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
-						'manage_stock'    => array( 'type' => 'boolean' ),
-						'stock_quantity'  => array( 'type' => 'integer' ),
-						'stock_status'    => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
-						'category_ids'    => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-						'tag_ids'         => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
-						'weight'          => array( 'type' => 'string' ),
-						'dimensions'      => array( 'type' => 'object', 'properties' => array( 'length' => array( 'type' => 'string' ), 'width' => array( 'type' => 'string' ), 'height' => array( 'type' => 'string' ) ), 'additionalProperties' => false ),
-						'external_url'    => array( 'type' => 'string', 'format' => 'uri' ),
-						'button_text'     => array( 'type' => 'string' ),
-						'grouped_products' => array( 'type' => 'array', 'items' => array( 'type' => 'integer', 'minimum' => 1 ) ),
-					),
-					'required'   => array( 'id', 'product_type_alias' ),
-					'additionalProperties' => false,
-				),
+				) ),
 			),
+			'required'             => array( 'id' ),
+			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
 			'type'       => 'object',
@@ -508,37 +498,78 @@ function mcp_wc_register_product_update(): void {
 			if ( isset( $input['status'] ) ) {
 				$product->set_status( sanitize_text_field( $input['status'] ) );
 			}
-			if ( isset( $input['regular_price'] ) ) {
+			if ( isset( $input['catalog_visibility'] ) && method_exists( $product, 'set_catalog_visibility' ) ) {
+				$product->set_catalog_visibility( sanitize_text_field( $input['catalog_visibility'] ) );
+			}
+
+			if ( isset( $input['regular_price'] ) && method_exists( $product, 'set_regular_price' ) ) {
 				$product->set_regular_price( sanitize_text_field( $input['regular_price'] ) );
 			}
-			if ( isset( $input['sale_price'] ) ) {
+			if ( isset( $input['sale_price'] ) && method_exists( $product, 'set_sale_price' ) ) {
 				$product->set_sale_price( sanitize_text_field( $input['sale_price'] ) );
 			}
-			if ( isset( $input['manage_stock'] ) ) {
+
+			if ( isset( $input['virtual'] ) && method_exists( $product, 'set_virtual' ) ) {
+				$product->set_virtual( (bool) $input['virtual'] );
+			}
+			if ( isset( $input['downloadable'] ) && method_exists( $product, 'set_downloadable' ) ) {
+				$product->set_downloadable( (bool) $input['downloadable'] );
+			}
+
+			if ( isset( $input['manage_stock'] ) && method_exists( $product, 'set_manage_stock' ) ) {
 				$product->set_manage_stock( (bool) $input['manage_stock'] );
 			}
-			if ( isset( $input['stock_quantity'] ) && $product->get_manage_stock() ) {
+			if ( isset( $input['stock_quantity'] ) && method_exists( $product, 'set_stock_quantity' ) ) {
 				$product->set_stock_quantity( (int) $input['stock_quantity'] );
 			}
-			if ( isset( $input['stock_status'] ) ) {
+			if ( isset( $input['stock_status'] ) && method_exists( $product, 'set_stock_status' ) ) {
 				$product->set_stock_status( sanitize_text_field( $input['stock_status'] ) );
 			}
-			if ( isset( $input['weight'] ) ) {
+
+			if ( isset( $input['weight'] ) && method_exists( $product, 'set_weight' ) ) {
 				$product->set_weight( sanitize_text_field( $input['weight'] ) );
 			}
 			if ( isset( $input['dimensions'] ) && is_array( $input['dimensions'] ) ) {
-				if ( isset( $input['dimensions']['length'] ) ) { $product->set_length( sanitize_text_field( $input['dimensions']['length'] ) ); }
-				if ( isset( $input['dimensions']['width'] ) ) { $product->set_width( sanitize_text_field( $input['dimensions']['width'] ) ); }
-				if ( isset( $input['dimensions']['height'] ) ) { $product->set_height( sanitize_text_field( $input['dimensions']['height'] ) ); }
+				if ( isset( $input['dimensions']['length'] ) && method_exists( $product, 'set_length' ) ) {
+					$product->set_length( sanitize_text_field( $input['dimensions']['length'] ) );
+				}
+				if ( isset( $input['dimensions']['width'] ) && method_exists( $product, 'set_width' ) ) {
+					$product->set_width( sanitize_text_field( $input['dimensions']['width'] ) );
+				}
+				if ( isset( $input['dimensions']['height'] ) && method_exists( $product, 'set_height' ) ) {
+					$product->set_height( sanitize_text_field( $input['dimensions']['height'] ) );
+				}
 			}
-			if ( isset( $input['external_url'] ) && $product->get_type() === 'external' ) {
+
+			if ( isset( $input['external_url'] ) && method_exists( $product, 'set_product_url' ) ) {
 				$product->set_product_url( esc_url_raw( $input['external_url'] ) );
 			}
-			if ( isset( $input['button_text'] ) && $product->get_type() === 'external' ) {
+			if ( isset( $input['button_text'] ) && method_exists( $product, 'set_button_text' ) ) {
 				$product->set_button_text( sanitize_text_field( $input['button_text'] ) );
 			}
-			if ( isset( $input['grouped_products'] ) && $product->get_type() === 'grouped' ) {
+
+			if ( isset( $input['grouped_products'] ) && method_exists( $product, 'set_children' ) ) {
 				$product->set_children( array_map( 'absint', $input['grouped_products'] ) );
+			}
+
+			if ( isset( $input['attributes'] ) && is_array( $input['attributes'] ) && method_exists( $product, 'set_attributes' ) ) {
+				$attrs = array();
+				foreach ( $input['attributes'] as $attr_data ) {
+					if ( ! isset( $attr_data['name'] ) || '' === $attr_data['name'] ) {
+						continue;
+					}
+					$attr = new \WC_Product_Attribute();
+					$attr->set_name( sanitize_text_field( $attr_data['name'] ) );
+					if ( isset( $attr_data['options'] ) && is_array( $attr_data['options'] ) ) {
+						$attr->set_options( array_map( 'sanitize_text_field', $attr_data['options'] ) );
+					} elseif ( isset( $attr_data['value'] ) ) {
+						$attr->set_options( array_map( 'trim', explode( '|', sanitize_text_field( $attr_data['value'] ) ) ) );
+					}
+					$attr->set_visible( isset( $attr_data['visible'] ) ? (bool) $attr_data['visible'] : true );
+					$attr->set_variation( isset( $attr_data['variation'] ) ? (bool) $attr_data['variation'] : false );
+					$attrs[] = $attr;
+				}
+				$product->set_attributes( $attrs );
 			}
 
 			$product->save();
