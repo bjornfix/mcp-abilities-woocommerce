@@ -4,7 +4,7 @@ Tags: woocommerce, mcp, api, automation, ecommerce
 Requires at least: 6.9
 Tested up to: 7.0
 Requires PHP: 8.0
-Stable tag: 1.0.3
+Stable tag: 1.0.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -98,6 +98,10 @@ This add-on plugin extends the MCP ecosystem with comprehensive WooCommerce func
 5. The abilities are now available via the MCP endpoint
 
 == Changelog ==
+
+= 1.0.4 =
+* Register abilities at priority 1 so expanded schemas take precedence over WooCommerce core's built-in abilities.
+* Variable, catalog_visibility, and attributes fields now available in product-create and product-update.
 
 = 1.0.3 =
 * Dynamic product type support: creation and update schemas now use `wc_get_product_types()` for all registered types including extensions (Subscriptions, Bookings, Bundles, etc.).
