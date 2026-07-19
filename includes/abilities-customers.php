@@ -33,10 +33,10 @@ function mcp_wc_register_customers_query(): void {
 				'id'           => array( 'type' => 'integer', 'minimum' => 1 ),
 				'email'        => array( 'type' => 'string', 'format' => 'email' ),
 				'search'       => array( 'type' => 'string', 'description' => 'Search by name or email.' ),
-				'role'         => array( 'type' => 'string', 'description' => 'Filter by WordPress user role.' ),
+				'role'         => array( 'type' => 'string', 'enum' => array( 'customer' ), 'description' => 'The customer interface is intentionally restricted to the customer role.' ),
 				'date_after'   => array( 'type' => 'string', 'format' => 'date-time' ),
 				'date_before'  => array( 'type' => 'string', 'format' => 'date-time' ),
-				'orderby'      => array( 'type' => 'string', 'enum' => array( 'id', 'name', 'email', 'registered_date', 'total_spent', 'order_count' ) ),
+				'orderby'      => array( 'type' => 'string', 'enum' => array( 'id', 'name', 'email', 'registered_date' ) ),
 				'order'        => array( 'type' => 'string', 'enum' => array( 'asc', 'desc' ) ),
 				'page'         => array( 'type' => 'integer', 'default' => 1, 'minimum' => 1 ),
 				'per_page'     => array( 'type' => 'integer', 'default' => 10, 'minimum' => 1, 'maximum' => 100 ),
@@ -83,14 +83,14 @@ function mcp_wc_register_customers_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'list_users' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
 			if ( isset( $input['id'] ) ) {
 				$user = get_userdata( (int) $input['id'] );
-				if ( ! $user ) {
+				if ( ! $user || ! MCP_WC_Ability_Execution_Module::is_customer_user( $user ) ) {
 					return array( 'customers' => array(), 'total_pages' => 0, 'page' => 1, 'per_page' => (int) ( $input['per_page'] ?? 10 ) );
 				}
 				return array( 'customers' => array( mcp_wc_format_customer( $user ) ), 'total_pages' => 1, 'page' => 1, 'per_page' => 1 );
@@ -101,16 +101,19 @@ function mcp_wc_register_customers_query(): void {
 			$args     = array(
 				'number' => $per_page,
 				'paged'  => $page,
+				'role'   => 'customer',
 			);
 
 			if ( ! empty( $input['search'] ) ) {
 				$args['search'] = '*' . sanitize_text_field( $input['search'] ) . '*';
 			}
-			if ( ! empty( $input['role'] ) ) {
-				$args['role'] = sanitize_text_field( $input['role'] );
+			if ( ! empty( $input['role'] ) && 'customer' !== sanitize_key( $input['role'] ) ) {
+				return mcp_wc_error( 'mcp_wc_invalid_customer_role', 'The customer interface only returns users with the customer role.' );
 			}
 			if ( ! empty( $input['orderby'] ) ) {
-				$args['orderby'] = sanitize_text_field( $input['orderby'] );
+				$orderby = sanitize_key( $input['orderby'] );
+				$orderby_map = array( 'id' => 'ID', 'name' => 'display_name', 'email' => 'user_email', 'registered_date' => 'user_registered' );
+				$args['orderby'] = $orderby_map[ $orderby ] ?? 'ID';
 			}
 			if ( ! empty( $input['order'] ) ) {
 				$args['order'] = strtoupper( sanitize_text_field( $input['order'] ) );
@@ -118,10 +121,21 @@ function mcp_wc_register_customers_query(): void {
 
 			if ( ! empty( $input['email'] ) ) {
 				$user = get_user_by( 'email', sanitize_email( $input['email'] ) );
-				if ( ! $user ) {
+				if ( ! $user || ! MCP_WC_Ability_Execution_Module::is_customer_user( $user ) ) {
 					return array( 'customers' => array(), 'total_pages' => 0, 'page' => 1, 'per_page' => $per_page );
 				}
 				return array( 'customers' => array( mcp_wc_format_customer( $user ) ), 'total_pages' => 1, 'page' => 1, 'per_page' => 1 );
+			}
+
+			if ( ! empty( $input['date_after'] ) || ! empty( $input['date_before'] ) ) {
+				$date_clause = array( 'inclusive' => true );
+				if ( ! empty( $input['date_after'] ) ) {
+					$date_clause['after'] = sanitize_text_field( $input['date_after'] );
+				}
+				if ( ! empty( $input['date_before'] ) ) {
+					$date_clause['before'] = sanitize_text_field( $input['date_before'] );
+				}
+				$args['date_query'] = array( $date_clause );
 			}
 
 			$query  = new \WP_User_Query( $args );
@@ -133,7 +147,7 @@ function mcp_wc_register_customers_query(): void {
 			$total = $query->get_total();
 			return array(
 				'customers'   => $customers,
-				'total_pages' => max( 1, (int) ceil( $total / $per_page ) ),
+				'total_pages' => (int) ceil( $total / $per_page ),
 				'page'        => $page,
 				'per_page'    => $per_page,
 			);
@@ -177,8 +191,9 @@ function mcp_wc_register_customer_create(): void {
 					'state'      => array( 'type' => 'string' ), 'postcode'   => array( 'type' => 'string' ),
 					'country'    => array( 'type' => 'string' ),
 				), 'additionalProperties' => false ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/customer-create' ),
 			),
-			'required'             => array( 'email' ),
+			'required'             => array( 'email', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -188,8 +203,10 @@ function mcp_wc_register_customer_create(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! current_user_can( 'create_users' ) ) {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/customer-create' );
+			if ( $confirmation ) { return $confirmation; }
+			if ( ! wc_rest_check_user_permissions( 'create' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
@@ -214,35 +231,41 @@ function mcp_wc_register_customer_create(): void {
 				return array( 'error' => $user_id->get_error_message() );
 			}
 
-			$customer = new \WC_Customer( $user_id );
+			try {
+				$customer = new \WC_Customer( $user_id );
 
-			if ( isset( $input['billing'] ) && is_array( $input['billing'] ) ) {
-				foreach ( $input['billing'] as $key => $value ) {
-					if ( is_string( $value ) ) {
-						$setter = "set_billing_{$key}";
-						if ( method_exists( $customer, $setter ) ) {
-							$customer->{$setter}( sanitize_text_field( $value ) );
+				if ( isset( $input['billing'] ) && is_array( $input['billing'] ) ) {
+					foreach ( $input['billing'] as $key => $value ) {
+						if ( is_string( $value ) ) {
+							$setter = "set_billing_{$key}";
+							if ( method_exists( $customer, $setter ) ) {
+								$customer->{$setter}( sanitize_text_field( $value ) );
+							}
 						}
 					}
 				}
-			}
-			if ( isset( $input['shipping'] ) && is_array( $input['shipping'] ) ) {
-				foreach ( $input['shipping'] as $key => $value ) {
-					if ( is_string( $value ) ) {
-						$setter = "set_shipping_{$key}";
-						if ( method_exists( $customer, $setter ) ) {
-							$customer->{$setter}( sanitize_text_field( $value ) );
+				if ( isset( $input['shipping'] ) && is_array( $input['shipping'] ) ) {
+					foreach ( $input['shipping'] as $key => $value ) {
+						if ( is_string( $value ) ) {
+							$setter = "set_shipping_{$key}";
+							if ( method_exists( $customer, $setter ) ) {
+								$customer->{$setter}( sanitize_text_field( $value ) );
+							}
 						}
 					}
 				}
+				$customer->save();
+			} catch ( \Throwable $throwable ) {
+				require_once ABSPATH . 'wp-admin/includes/user.php';
+				wp_delete_user( (int) $user_id );
+				return mcp_wc_error( 'mcp_wc_customer_create_failed', 'The customer could not be created; the partial account was removed.' );
 			}
-			$customer->save();
 
 			$user = get_userdata( $user_id );
 			return array( 'customer' => mcp_wc_format_customer( $user ) );
 		},
 		'permission_callback' => function (): bool {
-			return current_user_can( 'create_users' );
+			return function_exists( 'wc_rest_check_user_permissions' ) && wc_rest_check_user_permissions( 'create' );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => false, 'idempotent' => false ),
@@ -280,8 +303,9 @@ function mcp_wc_register_customer_update(): void {
 					'state'      => array( 'type' => 'string' ), 'postcode'   => array( 'type' => 'string' ),
 					'country'    => array( 'type' => 'string' ),
 				), 'additionalProperties' => false ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/customer-update' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -291,14 +315,19 @@ function mcp_wc_register_customer_update(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! current_user_can( 'edit_users' ) ) {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/customer-update' );
+			if ( $confirmation ) { return $confirmation; }
+			if ( ! MCP_WC_Ability_Execution_Module::can_edit_customer( (int) $input['id'] ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
 			$user = get_userdata( (int) $input['id'] );
 			if ( ! $user ) {
 				return array( 'error' => 'User not found.' );
+			}
+			if ( ! MCP_WC_Ability_Execution_Module::is_customer_user( $user ) ) {
+				return mcp_wc_error( 'mcp_wc_not_customer', 'The target user is not a WooCommerce customer account.' );
 			}
 
 			$data = array( 'ID' => $user->ID );
@@ -307,17 +336,15 @@ function mcp_wc_register_customer_update(): void {
 			if ( isset( $input['last_name'] ) ) { $data['last_name'] = sanitize_text_field( $input['last_name'] ); }
 			if ( isset( $input['password'] ) ) { $data['user_pass'] = $input['password']; }
 
-			$result = wp_update_user( $data );
-			if ( is_wp_error( $result ) ) {
-				return array( 'error' => $result->get_error_message() );
-			}
-
 			$customer = new \WC_Customer( $user->ID );
+			$rollback_fields = array( 'billing' => array(), 'shipping' => array() );
 			if ( isset( $input['billing'] ) && is_array( $input['billing'] ) ) {
 				foreach ( $input['billing'] as $key => $value ) {
 					if ( is_string( $value ) ) {
 						$setter = "set_billing_{$key}";
-						if ( method_exists( $customer, $setter ) ) {
+						$getter = "get_billing_{$key}";
+						if ( method_exists( $customer, $setter ) && method_exists( $customer, $getter ) ) {
+							$rollback_fields['billing'][ $key ] = $customer->{$getter}();
 							$customer->{$setter}( sanitize_text_field( $value ) );
 						}
 					}
@@ -327,18 +354,38 @@ function mcp_wc_register_customer_update(): void {
 				foreach ( $input['shipping'] as $key => $value ) {
 					if ( is_string( $value ) ) {
 						$setter = "set_shipping_{$key}";
-						if ( method_exists( $customer, $setter ) ) {
+						$getter = "get_shipping_{$key}";
+						if ( method_exists( $customer, $setter ) && method_exists( $customer, $getter ) ) {
+							$rollback_fields['shipping'][ $key ] = $customer->{$getter}();
 							$customer->{$setter}( sanitize_text_field( $value ) );
 						}
 					}
 				}
 			}
-			$customer->save();
+			try {
+				$customer->save();
+				$result = wp_update_user( $data );
+				if ( is_wp_error( $result ) ) { throw new \RuntimeException( $result->get_error_message() ); }
+			} catch ( \Throwable $throwable ) {
+				try {
+					$rollback = new \WC_Customer( $user->ID );
+					foreach ( $rollback_fields as $address_type => $fields ) {
+						foreach ( $fields as $key => $value ) {
+							$setter = "set_{$address_type}_{$key}";
+							if ( method_exists( $rollback, $setter ) ) { $rollback->{$setter}( $value ); }
+						}
+					}
+					$rollback->save();
+				} catch ( \Throwable $rollback_failure ) {
+					return mcp_wc_error( 'mcp_wc_customer_update_rollback_failed', 'The customer update failed and prior address values could not be fully restored.' );
+				}
+				return mcp_wc_error( 'mcp_wc_customer_update_failed', 'The customer could not be updated; prior address values were restored.' );
+			}
 
 			return array( 'customer' => mcp_wc_format_customer( get_userdata( $user->ID ) ) );
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_users' );
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['id'] ) && MCP_WC_Ability_Execution_Module::can_edit_customer( (int) $input['id'] );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
@@ -358,8 +405,9 @@ function mcp_wc_register_customer_delete(): void {
 			'properties'           => array(
 				'id'          => array( 'type' => 'integer', 'minimum' => 1 ),
 				'reassign_to' => array( 'type' => 'integer', 'description' => 'User ID to reassign posts and links to.' ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/customer-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -370,9 +418,13 @@ function mcp_wc_register_customer_delete(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! current_user_can( 'delete_users' ) ) {
+		'execute_callback'    => function ( array $input ) {
+			if ( ! MCP_WC_Ability_Execution_Module::can_delete_customer( (int) $input['id'] ) ) {
 				return array( 'error' => 'Permission denied.' );
+			}
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/customer-delete' );
+			if ( $confirmation ) {
+				return $confirmation;
 			}
 
 			$user_id = (int) $input['id'];
@@ -380,8 +432,12 @@ function mcp_wc_register_customer_delete(): void {
 			if ( ! $user ) {
 				return array( 'error' => 'User not found.' );
 			}
+			if ( ! MCP_WC_Ability_Execution_Module::is_customer_user( $user ) ) {
+				return mcp_wc_error( 'mcp_wc_not_customer', 'The target user is not a WooCommerce customer account.' );
+			}
 
 			$reassign = isset( $input['reassign_to'] ) ? (int) $input['reassign_to'] : null;
+			if ( null !== $reassign && ( $reassign === $user_id || ! get_userdata( $reassign ) ) ) { return mcp_wc_error( 'mcp_wc_invalid_reassignment', 'The reassignment target must be a different existing user.' ); }
 			$result   = wp_delete_user( $user_id, $reassign );
 
 			return array(
@@ -389,8 +445,8 @@ function mcp_wc_register_customer_delete(): void {
 				'id'      => $user_id,
 			);
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'delete_users' );
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['id'] ) && MCP_WC_Ability_Execution_Module::can_delete_customer( (int) $input['id'] );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => true ),
@@ -428,6 +484,6 @@ function mcp_wc_format_customer( \WP_User $user ): array {
 		'shipping'        => $shipping,
 		'total_spent'     => (string) wc_get_customer_total_spent( $user->ID ),
 		'order_count'     => (int) wc_get_customer_order_count( $user->ID ),
-		'date_created'    => $user->user_registered,
+		'date_created'    => $user->user_registered ? gmdate( 'Y-m-d\TH:i:s', strtotime( $user->user_registered . ' UTC' ) ) : null,
 	);
 }

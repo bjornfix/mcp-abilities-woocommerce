@@ -94,7 +94,7 @@ function mcp_wc_register_coupons_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_woocommerce' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -118,12 +118,14 @@ function mcp_wc_register_coupons_query(): void {
 			);
 
 			if ( ! empty( $input['code'] ) ) {
-				$args['s'] = sanitize_text_field( $input['code'] );
-				$args['exact'] = false;
-				$args['sentence'] = true;
+				$args['name'] = sanitize_title( wc_format_coupon_code( $input['code'] ) );
 			}
 			if ( ! empty( $input['search'] ) ) {
 				$args['s'] = sanitize_text_field( $input['search'] );
+			}
+			if ( ! empty( $input['type'] ) ) {
+				// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- WooCommerce stores discount type in coupon meta; the query is strictly paginated to at most 100 records.
+				$args['meta_query'] = array( array( 'key' => 'discount_type', 'value' => sanitize_key( $input['type'] ), 'compare' => '=' ) );
 			}
 
 			$query = new \WP_Query( $args );
@@ -131,9 +133,6 @@ function mcp_wc_register_coupons_query(): void {
 			foreach ( $query->posts as $post_id ) {
 				$coupon = new \WC_Coupon( $post_id );
 				if ( $coupon->get_id() ) {
-					if ( ! empty( $input['type'] ) && $coupon->get_discount_type() !== $input['type'] ) {
-						continue;
-					}
 					$coupons[] = mcp_wc_format_coupon( $coupon );
 				}
 			}
@@ -167,7 +166,7 @@ function mcp_wc_register_coupon_create(): void {
 				'code'                         => array( 'type' => 'string' ),
 				'description'                  => array( 'type' => 'string' ),
 				'discount_type'                => array( 'type' => 'string', 'enum' => mcp_wc_discount_types() ),
-				'amount'                       => array( 'type' => 'string' ),
+				'amount'                       => array( 'type' => 'string', 'pattern' => '^\\d+(?:\\.\\d+)?$' ),
 				'individual_use'               => array( 'type' => 'boolean' ),
 				'product_ids'                  => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
 				'excluded_product_ids'         => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
@@ -179,21 +178,19 @@ function mcp_wc_register_coupon_create(): void {
 				'maximum_amount'               => array( 'type' => 'string' ),
 				'free_shipping'                => array( 'type' => 'boolean' ),
 				'date_expires'                 => array( 'type' => 'string', 'format' => 'date-time' ),
+				'confirm_dangerous_action'     => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/coupon-create' ),
 			),
-			'required'             => array( 'code' ),
+			'required'             => array( 'code', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
 			'type'       => 'object',
-			'properties' => array( 'coupon' => array( 'type' => 'object', 'properties' => array(
-				'id'              => array( 'type' => 'integer' ), 'code' => array( 'type' => 'string' ),
-				'discount_type'   => array( 'type' => 'string' ), 'amount' => array( 'type' => 'string' ),
-				'usage_limit'     => array( 'type' => 'integer' ), 'usage_count' => array( 'type' => 'integer' ),
-				'minimum_amount'  => array( 'type' => 'string' ), 'free_shipping' => array( 'type' => 'boolean' ),
-			), 'additionalProperties' => false ) ),
+			'properties' => array( 'coupon' => mcp_wc_coupon_output_schema() ),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/coupon-create' );
+			if ( $confirmation ) { return $confirmation; }
 			if ( ! current_user_can( 'manage_woocommerce' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -245,7 +242,7 @@ function mcp_wc_register_coupon_update(): void {
 				'code'                         => array( 'type' => 'string' ),
 				'description'                  => array( 'type' => 'string' ),
 				'discount_type'                => array( 'type' => 'string', 'enum' => mcp_wc_discount_types() ),
-				'amount'                       => array( 'type' => 'string' ),
+				'amount'                       => array( 'type' => 'string', 'pattern' => '^\\d+(?:\\.\\d+)?$' ),
 				'individual_use'               => array( 'type' => 'boolean' ),
 				'product_ids'                  => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
 				'excluded_product_ids'         => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
@@ -257,8 +254,9 @@ function mcp_wc_register_coupon_update(): void {
 				'maximum_amount'               => array( 'type' => 'string' ),
 				'free_shipping'                => array( 'type' => 'boolean' ),
 				'date_expires'                 => array( 'type' => 'string', 'format' => 'date-time' ),
+				'confirm_dangerous_action'     => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/coupon-update' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -266,7 +264,9 @@ function mcp_wc_register_coupon_update(): void {
 			'properties' => array( 'coupon' => array( 'type' => 'object' ) ),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/coupon-update' );
+			if ( $confirmation ) { return $confirmation; }
 			$result = mcp_wc_get_coupon_or_error( (int) $input['id'], 'update' );
 			if ( ! $result['success'] ) { return $result; }
 
@@ -315,8 +315,9 @@ function mcp_wc_register_coupon_delete(): void {
 			'properties'           => array(
 				'id'    => array( 'type' => 'integer', 'minimum' => 1 ),
 				'force' => array( 'type' => 'boolean', 'default' => true ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/coupon-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -324,7 +325,9 @@ function mcp_wc_register_coupon_delete(): void {
 			'properties' => array( 'deleted' => array( 'type' => 'boolean' ), 'id' => array( 'type' => 'integer' ) ),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/coupon-delete' );
+			if ( $confirmation ) { return $confirmation; }
 			$result = mcp_wc_get_coupon_or_error( (int) $input['id'], 'delete' );
 			if ( ! $result['success'] ) { return $result; }
 

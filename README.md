@@ -1,205 +1,317 @@
 # MCP Abilities for WooCommerce
 
-Comprehensive WooCommerce abilities for MCP. Products, orders, coupons, customers, categories, tags, attributes, variations, reports, settings, shipping, tax, payment gateways, reviews, and webhooks.
+[![Latest release](https://img.shields.io/github/v/release/bjornfix/mcp-abilities-for-woocommerce?sort=semver)](https://github.com/bjornfix/mcp-abilities-for-woocommerce/releases)
+[![License](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
+[![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759b.svg)](https://wordpress.org/)
+[![PHP](https://img.shields.io/badge/PHP-8.0%2B-777bb4.svg)](https://www.php.net/)
 
-[![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-blue)](https://wordpress.org/)
-[![PHP](https://img.shields.io/badge/PHP-8.0%2B-purple)](https://php.net/)
-[![License](https://img.shields.io/badge/License-GPL%20v2%2B-orange)](https://www.gnu.org/licenses/gpl-2.0.html)
-[![Release](https://img.shields.io/badge/Stable-1.0.2-green)](https://github.com/bjornfix/mcp-abilities-woocommerce/releases)
+Secure, structured WooCommerce management for MCP clients through the WordPress Abilities API.
 
-**Tags**: woocommerce, mcp, api, automation, ecommerce, products, orders, coupons, customers, reports
+**Stable version:** 0.2.11<br>
+**Tested with WordPress:** 7.0<br>
+**License:** GPL-2.0-or-later<br>
+**Tags:** woocommerce, mcp, abilities, ai, automation
+
+Version 0.2.11 exposes 79 canonical abilities under `woocommerce-mcp/*`. They cover products, orders, customers, coupons, reviews, reports, store configuration, tax, shipping, payment gateways, webhooks, and operational diagnostics.
 
 ## What It Does
 
-This plugin exposes comprehensive WooCommerce store management through the MCP Abilities API. It gives AI agents programmatic access to products, orders, coupons, customers, reports, settings, tax, shipping, payment gateways, webhooks, and reviews — everything a WooCommerce store operator needs.
+The plugin turns WooCommerce's management surface into typed, discoverable abilities for compatible MCP clients. An authorized operator can search a catalogue, create or update commercial records, inspect operations, and administer core store infrastructure without relying on fragile screen automation.
+
+The abilities use WooCommerce CRUD and query APIs, apply object-level authorization, validate input and output contracts, and return normalized errors that an MCP client can act on reliably.
 
 ## The Real Workflow
 
-Without this plugin, managing a WooCommerce store requires logging into `/wp-admin/`, navigating multiple screens, filling forms, and manually checking reports. With MCP Abilities for WooCommerce, an AI agent can:
+1. An MCP client discovers the `woocommerce-mcp/*` abilities and their JSON schemas.
+2. The client selects the narrow ability that matches the task.
+3. WordPress checks the current user's capability against the exact target object where applicable.
+4. High-impact operations require the exact confirmation token declared by that ability.
+5. WooCommerce performs the operation through its native data APIs.
+6. The ability returns a bounded, structured result or a machine-readable `WP_Error`.
 
-- Query products by SKU, type, stock status, category, or tag
-- Create physical, virtual, digital, affiliate, or grouped products
-- Manage product variations with attributes
-- Process orders — create, update status, add notes, delete
-- Create and manage discount coupons with product/category restrictions
-- Look up customers with billing/shipping details and order history
-- Pull sales overviews, top products, and customer reports
-- Inspect tax rates, shipping zones, payment gateways, and webhooks
-- Moderate product reviews
-- Manage product categories, tags, and attributes
+## Why This Feels Different
+
+- One canonical namespace makes tool discovery predictable.
+- Exact schemas replace loosely structured requests.
+- Native WooCommerce authorization protects the actual product, order, customer, review, or taxonomy target.
+- Confirmation contracts make externally visible and destructive actions explicit.
+- Bounded collections and resumable reports remain usable on larger stores.
+- High-Performance Order Storage is supported because order work uses WooCommerce APIs rather than direct post-table queries.
+- Legacy `woocommerce/*` names remain available only when no other plugin owns them, preventing silent name collisions.
 
 ## Before vs After
 
-**Before**: Click through WooCommerce admin screens, fill forms, copy-paste data.  
-**After**: Ask an AI agent to do it. One query, one result.
+| Before | With MCP Abilities for WooCommerce |
+|---|---|
+| Client-specific, undocumented store calls | Discoverable abilities with input and output schemas |
+| Broad role checks for sensitive mutations | Native authorization against the exact object |
+| Destructive calls can look like ordinary writes | Exact confirmation tokens for high-impact operations |
+| Large queries can run without a clear bound | Pagination, hard limits, scan caps, and resumable report cursors |
+| Integration failures leak inconsistent result shapes | Normalized `WP_Error` failures before output validation |
+| Direct order table assumptions | WooCommerce CRUD/query APIs compatible with HPOS |
 
 ## Who It Is For
 
-- WooCommerce store operators who want AI-assisted management
-- Developers building automation on top of WooCommerce
-- AI agents and MCP-based workflows that need store data access
+- WooCommerce operators connecting an MCP-compatible automation client.
+- Developers building reviewed store-management workflows on the WordPress Abilities API.
+- Agencies that need a consistent, capability-aware interface across WooCommerce sites.
+- Operations teams that want structured catalogue, order, reporting, and configuration tools without browser automation.
 
 ## Requirements
 
-- WordPress 6.9+
-- PHP 8.0+
-- [Abilities API](https://github.com/WordPress/abilities-api) plugin
-- [WooCommerce](https://wordpress.org/plugins/woocommerce/) 9.0+
+- WordPress 6.9 or newer
+- PHP 8.0 or newer
+- WooCommerce
+- An Abilities API-compatible MCP adapter or client integration
 
 ## Documentation
 
-- [Devenia Plugin Page](https://devenia.com/plugins/mcp-abilities-woocommerce/)
+- [Plugin documentation and overview](https://devenia.com/plugins/mcp-abilities-for-woocommerce/)
+- [GitHub releases](https://github.com/bjornfix/mcp-abilities-for-woocommerce/releases)
+- [Stable plugin download](https://downloads.devenia.com/mcp-abilities-for-woocommerce.zip)
+- [WordPress Abilities API](https://developer.wordpress.org/news/2025/11/introducing-the-wordpress-abilities-api/)
 
-## Complete Ability Inventory (37 abilities)
+## Start Here
 
-**Products & Catalog (21)**
-| Ability | Description |
-|---|---|
-| `woocommerce/products-query` | Find products by filters |
-| `woocommerce/product-create` | Create any product type |
-| `woocommerce/product-update` | Update product fields |
-| `woocommerce/product-delete` | Delete or trash a product |
-| `woocommerce/variations-query` | List variations |
-| `woocommerce/variation-create` | Create a variation |
-| `woocommerce/variation-update` | Update a variation |
-| `woocommerce/variation-delete` | Delete a variation |
-| `woocommerce/categories-query` | List categories |
-| `woocommerce/category-create` | Create a category |
-| `woocommerce/category-update` | Update a category |
-| `woocommerce/category-delete` | Delete a category |
-| `woocommerce/tags-query` | List tags |
-| `woocommerce/tag-create` | Create a tag |
-| `woocommerce/tag-update` | Update a tag |
-| `woocommerce/tag-delete` | Delete a tag |
-| `woocommerce/attributes-query` | List global attributes |
-| `woocommerce/attribute-terms-query` | List attribute terms |
-| `woocommerce/attribute-term-create` | Create attribute term |
-| `woocommerce/attribute-term-update` | Update attribute term |
-| `woocommerce/attribute-term-delete` | Delete attribute term |
+1. Install and activate WooCommerce. WordPress 6.9 or newer already includes the server-side Abilities API.
+2. Install and activate this plugin.
+3. Connect an Abilities API-compatible MCP adapter.
+4. Discover abilities under `woocommerce-mcp/*`.
+5. Begin with a read-only query such as `woocommerce-mcp/products-query`.
+6. Review the schema and exact confirmation value before enabling any mutation workflow.
 
-**Orders (5)**
-| Ability | Description |
-|---|---|
-| `woocommerce/orders-query` | Find orders by filters |
-| `woocommerce/order-create` | Create a new order |
-| `woocommerce/order-update-status` | Update order status |
-| `woocommerce/order-add-note` | Add note to order |
-| `woocommerce/order-delete` | Delete or trash an order |
+## Complete Ability Inventory
 
-**Coupons (4)**
-| Ability | Description |
-|---|---|
-| `woocommerce/coupons-query` | List coupons |
-| `woocommerce/coupon-create` | Create a coupon |
-| `woocommerce/coupon-update` | Update a coupon |
-| `woocommerce/coupon-delete` | Delete a coupon |
+### Products, variations, taxonomy, metadata, and stock (28)
 
-**Customers (1)**
-| Ability | Description |
-|---|---|
-| `woocommerce/customers-query` | Find customers |
+- `woocommerce-mcp/products-query`
+- `woocommerce-mcp/product-create`
+- `woocommerce-mcp/product-update`
+- `woocommerce-mcp/product-delete`
+- `woocommerce-mcp/variations-query`
+- `woocommerce-mcp/variation-create`
+- `woocommerce-mcp/variation-update`
+- `woocommerce-mcp/variation-delete`
+- `woocommerce-mcp/categories-query`
+- `woocommerce-mcp/category-create`
+- `woocommerce-mcp/category-update`
+- `woocommerce-mcp/category-delete`
+- `woocommerce-mcp/tags-query`
+- `woocommerce-mcp/tag-create`
+- `woocommerce-mcp/tag-update`
+- `woocommerce-mcp/tag-delete`
+- `woocommerce-mcp/attributes-query`
+- `woocommerce-mcp/attribute-create`
+- `woocommerce-mcp/attribute-update`
+- `woocommerce-mcp/attribute-delete`
+- `woocommerce-mcp/attribute-terms-query`
+- `woocommerce-mcp/attribute-term-create`
+- `woocommerce-mcp/attribute-term-update`
+- `woocommerce-mcp/attribute-term-delete`
+- `woocommerce-mcp/product-meta-query`
+- `woocommerce-mcp/product-meta-update`
+- `woocommerce-mcp/product-duplicate`
+- `woocommerce-mcp/products-bulk-stock`
 
-**Reports (4)**
-| Ability | Description |
-|---|---|
-| `woocommerce/sales-overview` | Sales statistics |
-| `woocommerce/product-report` | Top products by sales |
-| `woocommerce/customer-report` | Top customers |
-| `woocommerce/stock-report` | Stock status overview |
+### Orders (9)
 
-**Reviews (1)**
-| Ability | Description |
-|---|---|
-| `woocommerce/reviews-query` | List product reviews or moderate a review |
+- `woocommerce-mcp/orders-query`
+- `woocommerce-mcp/order-create`
+- `woocommerce-mcp/order-update-status`
+- `woocommerce-mcp/order-delete`
+- `woocommerce-mcp/order-refunds-query`
+- `woocommerce-mcp/order-refund-create`
+- `woocommerce-mcp/order-notes-query`
+- `woocommerce-mcp/order-items-update`
+- `woocommerce-mcp/order-resend-email`
 
-**Settings & Infrastructure (6)**
-| Ability | Description |
-|---|---|
-| `woocommerce/store-settings` | Store configuration |
-| `woocommerce/tax-rates-query` | Tax rates listing |
-| `woocommerce/shipping-zones-query` | Shipping zones |
-| `woocommerce/shipping-methods-query` | Shipping methods |
-| `woocommerce/payment-gateways-query` | Payment gateways |
-| `woocommerce/webhooks-query` | WooCommerce webhooks |
+### Coupons (4)
+
+- `woocommerce-mcp/coupons-query`
+- `woocommerce-mcp/coupon-create`
+- `woocommerce-mcp/coupon-update`
+- `woocommerce-mcp/coupon-delete`
+
+### Customers (4)
+
+- `woocommerce-mcp/customers-query`
+- `woocommerce-mcp/customer-create`
+- `woocommerce-mcp/customer-update`
+- `woocommerce-mcp/customer-delete`
+
+### Reports (4)
+
+- `woocommerce-mcp/sales-overview`
+- `woocommerce-mcp/product-report`
+- `woocommerce-mcp/customer-report`
+- `woocommerce-mcp/stock-report`
+
+### Store and operational settings (15)
+
+- `woocommerce-mcp/store-settings`
+- `woocommerce-mcp/tax-rates-query`
+- `woocommerce-mcp/shipping-zones-query`
+- `woocommerce-mcp/shipping-methods-query`
+- `woocommerce-mcp/payment-gateways-query`
+- `woocommerce-mcp/webhooks-query`
+- `woocommerce-mcp/webhook-create`
+- `woocommerce-mcp/webhook-update`
+- `woocommerce-mcp/webhook-delete`
+- `woocommerce-mcp/shipping-classes-query`
+- `woocommerce-mcp/tax-classes-query`
+- `woocommerce-mcp/system-status`
+- `woocommerce-mcp/system-tools-query`
+- `woocommerce-mcp/system-tool-run`
+- `woocommerce-mcp/email-settings`
+
+### Store infrastructure mutations (11)
+
+- `woocommerce-mcp/store-settings-update`
+- `woocommerce-mcp/tax-rate-save`
+- `woocommerce-mcp/tax-rate-delete`
+- `woocommerce-mcp/shipping-zone-save`
+- `woocommerce-mcp/shipping-zone-delete`
+- `woocommerce-mcp/shipping-method-add`
+- `woocommerce-mcp/shipping-method-update`
+- `woocommerce-mcp/shipping-method-delete`
+- `woocommerce-mcp/payment-gateway-update`
+- `woocommerce-mcp/shipping-class-save`
+- `woocommerce-mcp/shipping-class-delete`
+
+### Product reviews (4)
+
+- `woocommerce-mcp/reviews-query`
+- `woocommerce-mcp/review-create`
+- `woocommerce-mcp/review-update`
+- `woocommerce-mcp/review-delete`
 
 ## Usage Examples
 
-### Create a physical product
+### Query published products
 
 ```json
 {
-  "product_type_alias": "physical",
-  "name": "Widget Pro",
-  "sku": "WDG-001",
-  "regular_price": "29.99",
-  "description": "Professional-grade widget",
-  "stock_status": "instock"
+  "ability": "woocommerce-mcp/products-query",
+  "input": {
+    "status": "publish",
+    "per_page": 25,
+    "page": 1
+  }
 }
 ```
 
-### Query orders by date and status
+### Create a product with explicit confirmation
 
 ```json
 {
-  "status": "processing",
-  "date_after": "2026-07-01T00:00:00",
-  "include_line_items": true,
-  "per_page": 10
+  "ability": "woocommerce-mcp/product-create",
+  "input": {
+    "name": "Replacement hydraulic valve",
+    "type": "simple",
+    "regular_price": "249.00",
+    "status": "draft",
+    "confirm_dangerous_action": "woocommerce-mcp/product-create"
+  }
 }
 ```
 
-### Create a coupon
+### Create a partial refund
 
 ```json
 {
-  "code": "SUMMER25",
-  "discount_type": "percent",
-  "amount": "25",
-  "description": "Summer sale 25% off",
-  "minimum_amount": "50.00",
-  "date_expires": "2026-08-31T23:59:59"
+  "ability": "woocommerce-mcp/order-refund-create",
+  "input": {
+    "order_id": 123,
+    "amount": "25.00",
+    "reason": "Agreed price adjustment",
+    "confirm_dangerous_action": "woocommerce-mcp/order-refund-create"
+  }
 }
 ```
 
-### Get sales overview
+### Continue a bounded sales report
 
 ```json
 {
-  "date_after": "2026-07-01T00:00:00",
-  "date_before": "2026-07-18T23:59:59"
+  "ability": "woocommerce-mcp/sales-overview",
+  "input": {
+    "currency": "EUR",
+    "date_after": "2026-01-01T00:00:00Z",
+    "max_orders": 1000,
+    "cursor_page": 1
+  }
 }
 ```
 
-## Safety & Ownership
+When `has_more` is `true`, pass `next_cursor_page` as the next request's `cursor_page`.
 
-- Every ability requires appropriate WordPress capabilities: `edit_products`, `edit_shop_orders`, `manage_woocommerce`, `manage_product_terms`, `list_users`, `view_woocommerce_reports`, `moderate_comments`
-- All input is sanitized: text fields, SKUs, emails, URLs, prices, postal codes
-- Product price inputs include regex validation for decimal format
-- Product descriptions and short descriptions are run through `wp_kses_post`
-- `additionalProperties: false` on all input schemas prevents injection of unexpected fields
-- The plugin only activates when both the Abilities API and WooCommerce are active
+## Safety and Ownership Boundaries
+
+- WordPress authentication and WooCommerce capabilities remain the authorization source of truth.
+- Product, order, customer, review, and taxonomy mutations use exact-object or native WooCommerce permission checks where applicable.
+- Externally visible and destructive operations require the exact `confirm_dangerous_action` token declared in their input schema.
+- Persistent outbound URLs for webhooks, external products, and downloads must use public HTTPS hosts. Private, reserved, loopback, unresolved, and mixed public/private destinations are rejected.
+- Webhook secrets are accepted when required but never returned by read abilities.
+- Product metadata is limited to public keys by default. Protected keys require the `mcp_wc_allowed_protected_product_meta_keys` filter.
+- WooCommerce system tools are disabled by default. Approved tool IDs must be added through `mcp_wc_allowed_system_tools`.
+- Collection abilities are paginated and bounded. Reports cap their scan and expose a continuation cursor.
+- The plugin manages WooCommerce data and settings only; the MCP adapter owns transport, authentication handoff, and client discovery.
+- New integrations should use `woocommerce-mcp/*`. Deprecated `woocommerce/*` aliases are registered only when another component does not already own the name.
 
 ## Installation
 
-1. Install and activate [Abilities API](https://github.com/WordPress/abilities-api)
-2. Install and activate [WooCommerce](https://wordpress.org/plugins/woocommerce/)
-3. Upload `mcp-abilities-woocommerce` to `/wp-content/plugins/`
-4. Activate through the 'Plugins' menu
+### WordPress admin
 
-## Changelog
+1. Download the [stable ZIP](https://downloads.devenia.com/mcp-abilities-for-woocommerce.zip).
+2. In WordPress, open **Plugins → Add New Plugin → Upload Plugin**.
+3. Upload the ZIP and activate the plugin.
+4. Confirm that WooCommerce is active and WordPress is version 6.9 or newer.
 
-### 1.0.0
+### WP-CLI
 
-Initial release with 37 abilities covering the full WooCommerce domain model.
+```bash
+wp plugin install mcp-abilities-for-woocommerce.zip --activate
+```
+
+## Development and Verification
+
+```bash
+find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l
+php tests/run-contract.php
+git diff --check
+```
+
+Release candidates must also pass WordPress Plugin Check on a development WordPress site with WooCommerce and the Abilities API active.
+
+## Recent Changes
+
+### 0.2.11
+
+- Added a shared execution-policy boundary with canonical naming, safe compatibility aliases, normalized errors, and adapter-safe optional inputs.
+- Added exact-object authorization and customer-role boundaries.
+- Rebuilt order mutations and refunds around coherent WooCommerce CRUD operations.
+- Added bounded, currency-specific, refund-aware reports with resumable cursors.
+- Added store, tax, shipping, payment-gateway, shipping-class, review, stock, and protected-meta management coverage.
+- Hardened persistent outbound destinations, webhook secrets, system tools, and collection limits.
+- Added executable contract checks and aligned package metadata.
+
+See [all releases](https://github.com/bjornfix/mcp-abilities-for-woocommerce/releases) for the complete history.
 
 ## Contributing
 
-Contributions are welcome. Please open an issue or PR on GitHub.
+Issues and focused pull requests are welcome. Include a reproducible case, preserve backward compatibility where practical, and add contract coverage for changes to schemas, permissions, confirmation rules, or output shapes. Every release must pass PHP lint, the executable contract suite, WordPress Plugin Check, and a development-site runtime check.
 
 ## License
 
-GPL-2.0+
+Licensed under the [GNU General Public License v2.0 or later](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html).
 
 ## Author
 
 [basicus](https://profiles.wordpress.org/basicus/)
+
+## Links
+
+- [Plugin page](https://devenia.com/plugins/mcp-abilities-for-woocommerce/)
+- [Source repository](https://github.com/bjornfix/mcp-abilities-for-woocommerce)
+- [Releases](https://github.com/bjornfix/mcp-abilities-for-woocommerce/releases)
+- [Stable download](https://downloads.devenia.com/mcp-abilities-for-woocommerce.zip)

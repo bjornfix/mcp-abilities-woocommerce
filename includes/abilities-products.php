@@ -33,7 +33,10 @@ function mcp_wc_get_product_or_error( int $id, string $action ): array {
 	if ( ! $product ) {
 		return array( 'success' => false, 'message' => 'Product not found with ID: ' . $id );
 	}
-	if ( ! current_user_can( 'edit_products' ) ) {
+	$allowed = 'delete' === $action
+		? MCP_WC_Ability_Execution_Module::can_delete_product( $id )
+		: MCP_WC_Ability_Execution_Module::can_edit_product( $id );
+	if ( ! $allowed ) {
 		return array( 'success' => false, 'message' => 'You do not have permission to ' . $action . ' products.' );
 	}
 	return array( 'success' => true, 'product' => $product );
@@ -43,7 +46,7 @@ function mcp_wc_validate_price( ?string $price ): ?string {
 	if ( null === $price || '' === $price ) {
 		return null;
 	}
-	return preg_match( '/^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$/', $price ) ? $price : null;
+	return preg_match( '/^(?:(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$/', $price ) ? $price : null;
 }
 
 // ─── Products ────────────────────────────────────────────────────────────────
@@ -78,6 +81,7 @@ function mcp_wc_register_product_abilities(): void {
 	mcp_wc_register_attribute_update();
 	mcp_wc_register_attribute_delete();
 	mcp_wc_register_product_meta_query();
+	mcp_wc_register_product_meta_update();
 	mcp_wc_register_product_duplicate();
 	mcp_wc_register_products_bulk_stock();
 }
@@ -94,7 +98,7 @@ function mcp_wc_register_products_query(): void {
 			'properties'           => array(
 				'id'                => array( 'type' => 'integer', 'minimum' => 1 ),
 				'search'            => array( 'type' => 'string' ),
-				'sku'               => array( 'type' => 'string', 'description' => 'Limit results to products with SKUs that partially match this string.' ),
+					'sku'               => array( 'type' => 'string', 'description' => 'Limit results to the exact SKU.' ),
 				'status'            => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
 				'product_type_alias' => array( 'type' => 'string', 'enum' => array_keys( mcp_wc_product_type_aliases() ) ),
 				'stock_status'      => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
@@ -118,7 +122,7 @@ function mcp_wc_register_products_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'edit_products' ) ) {
 				return array( 'error' => 'You do not have permission to query products.' );
 			}
@@ -154,47 +158,43 @@ function mcp_wc_register_products_query(): void {
 			if ( ! empty( $input['stock_status'] ) ) {
 				$args['stock_status'] = sanitize_text_field( $input['stock_status'] );
 			}
-			if ( ! empty( $input['category_id'] ) ) {
-				$args['category'] = array( (int) $input['category_id'] );
-			}
-			if ( ! empty( $input['tag_id'] ) ) {
-				$args['tag'] = array( (int) $input['tag_id'] );
+				if ( ! empty( $input['category_id'] ) ) {
+					$term = get_term( (int) $input['category_id'], 'product_cat' );
+					if ( ! $term || is_wp_error( $term ) ) { return array( 'products' => array(), 'total_pages' => 0, 'page' => $page, 'per_page' => $per_page ); }
+					$args['category'] = array( $term->slug );
+				}
+				if ( ! empty( $input['tag_id'] ) ) {
+					$term = get_term( (int) $input['tag_id'], 'product_tag' );
+					if ( ! $term || is_wp_error( $term ) ) { return array( 'products' => array(), 'total_pages' => 0, 'page' => $page, 'per_page' => $per_page ); }
+					$args['tag'] = array( $term->slug );
 			}
 			if ( ! empty( $input['low_stock'] ) ) {
 				$args['low_in_stock'] = true;
 			}
 			if ( ! empty( $input['date_after'] ) ) {
-				$args['date_created'] = sanitize_text_field( $input['date_after'] );
+					$args['date_created'] = '>' . sanitize_text_field( $input['date_after'] );
 			}
 
 			$product_type_alias = $input['product_type_alias'] ?? null;
-			if ( null !== $product_type_alias ) {
+				if ( null !== $product_type_alias ) {
 				$type = mcp_wc_map_product_type_alias( $product_type_alias );
 				$args['type'] = $type;
 
-				if ( 'simple' === $type ) {
+					if ( 'simple' === $type ) {
 					if ( 'virtual' === $product_type_alias ) {
 						$args['virtual'] = true;
-					} elseif ( 'digital' === $product_type_alias ) {
+						} elseif ( 'digital' === $product_type_alias ) {
 						$args['virtual'] = true;
 						$args['downloadable'] = true;
+						}
+						if ( 'physical' === $product_type_alias ) {
+							$args['virtual'] = false;
+							$args['downloadable'] = false;
+						}
 					}
 				}
-			}
 
 			$results = wc_get_products( $args );
-
-			if ( null !== $product_type_alias && 'physical' === $product_type_alias ) {
-				$filtered = array();
-				foreach ( $results->products as $product ) {
-					if ( ! $product->get_virtual() && ! $product->get_downloadable() ) {
-						$filtered[] = $product;
-					}
-				}
-				$results->products = $filtered;
-				$results->total = count( $filtered );
-				$results->max_num_pages = max( 1, (int) ceil( $results->total / $per_page ) );
-			}
 
 			$products = array();
 			foreach ( $results->products as $product ) {
@@ -208,8 +208,8 @@ function mcp_wc_register_products_query(): void {
 				'per_page'    => $per_page,
 			);
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_products' );
+			'permission_callback' => function ( array $input ): bool {
+				return isset( $input['id'] ) ? MCP_WC_Ability_Execution_Module::can_read_product( (int) $input['id'] ) : current_user_can( 'edit_products' );
 		},
 		'meta'                => array(
 			'annotations' => array(
@@ -240,11 +240,11 @@ function mcp_wc_register_product_create(): void {
 				'name'               => array( 'type' => 'string' ),
 				'slug'               => array( 'type' => 'string', 'description' => 'URL slug. Auto-generated from name if omitted.' ),
 				'sku'                => array( 'type' => 'string' ),
-				'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-				'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
 				'description'        => array( 'type' => 'string' ),
 				'short_description'  => array( 'type' => 'string' ),
-				'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
+				'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses(), 'default' => 'draft' ),
 				'manage_stock'       => array( 'type' => 'boolean' ),
 				'stock_quantity'     => array( 'type' => 'integer' ),
 				'stock_status'       => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
@@ -266,11 +266,12 @@ function mcp_wc_register_product_create(): void {
 				'gallery_image_ids'  => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ), 'description' => 'Media library attachment IDs for the product image gallery.' ),
 				'downloads'          => array(
 					'type'  => 'array',
+					'maxItems' => 100,
 					'items' => array(
 						'type'       => 'object',
 						'properties' => array(
 							'name'        => array( 'type' => 'string' ),
-							'file'        => array( 'type' => 'string', 'description' => 'File URL or path.' ),
+							'file'        => array( 'type' => 'string', 'format' => 'uri', 'description' => 'Public HTTPS download URL.' ),
 							'download_id' => array( 'type' => 'string', 'description' => 'Leave blank for new files, or provide ID to update an existing downloadable.' ),
 						),
 						'required'             => array( 'name', 'file' ),
@@ -303,7 +304,8 @@ function mcp_wc_register_product_create(): void {
 					'additionalProperties' => false,
 				) ),
 			),
-			'required'             => array( 'name' ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/product-create' ),
+			'required'             => array( 'name', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -313,8 +315,11 @@ function mcp_wc_register_product_create(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$product = null;
 			try {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/product-create' );
+			if ( $confirmation ) { return $confirmation; }
 			if ( ! current_user_can( 'edit_products' ) ) {
 				return array( 'error' => 'You do not have permission to create products.' );
 			}
@@ -334,7 +339,7 @@ function mcp_wc_register_product_create(): void {
 			} else {
 				$classname = 'WC_Product_' . implode( '_', array_map( 'ucfirst', explode( '-', str_replace( '_', '-', $wc_type ) ) ) );
 				if ( ! class_exists( $classname ) ) {
-					$classname = \WC_Product::class;
+					return mcp_wc_error( 'mcp_wc_unsupported_product_type', 'The requested product type is not provided by WooCommerce or an active extension.' );
 				}
 			}
 
@@ -354,9 +359,7 @@ function mcp_wc_register_product_create(): void {
 			if ( isset( $input['short_description'] ) ) {
 				$product->set_short_description( wp_kses_post( $input['short_description'] ) );
 			}
-			if ( isset( $input['status'] ) ) {
-				$product->set_status( sanitize_text_field( $input['status'] ) );
-			}
+			$product->set_status( sanitize_text_field( $input['status'] ?? 'draft' ) );
 			if ( isset( $input['catalog_visibility'] ) && method_exists( $product, 'set_catalog_visibility' ) ) {
 				$product->set_catalog_visibility( sanitize_text_field( $input['catalog_visibility'] ) );
 			}
@@ -411,7 +414,9 @@ function mcp_wc_register_product_create(): void {
 			}
 
 			if ( isset( $input['external_url'] ) && method_exists( $product, 'set_product_url' ) ) {
-				$product->set_product_url( esc_url_raw( $input['external_url'] ) );
+				$external_url = MCP_WC_Ability_Execution_Module::validate_outbound_https_url( (string) $input['external_url'] );
+				if ( is_wp_error( $external_url ) ) { return $external_url; }
+				$product->set_product_url( $external_url );
 			}
 			if ( isset( $input['button_text'] ) && method_exists( $product, 'set_button_text' ) ) {
 				$product->set_button_text( sanitize_text_field( $input['button_text'] ) );
@@ -474,65 +479,41 @@ function mcp_wc_register_product_create(): void {
 					}
 				}
 			}
-
-			$product_id = $product->save();
-
-			// Ensure frontend visibility: WC 10.9 set_catalog_visibility does not reliably persist _visibility meta
-		$visibility = sanitize_text_field( $input['catalog_visibility'] ?? 'visible' );
-		update_post_meta( $product_id, '_visibility', $visibility );
-
-		// Product visibility taxonomy: remove exclusion terms to make product visible.
-		// WC does NOT have a 'visible' term — visibility is achieved by removing exclude-from-catalog and exclude-from-search.
-		$remove_terms = array( 'exclude-from-catalog', 'exclude-from-search' );
-		if ( 'hidden' === $visibility ) {
-			wp_set_object_terms( $product_id, 'exclude-from-catalog', 'product_visibility' );
-			wp_set_object_terms( $product_id, 'exclude-from-search', 'product_visibility', true );
-		} elseif ( 'catalog' === $visibility ) {
-			wp_remove_object_terms( $product_id, 'exclude-from-catalog', 'product_visibility' );
-			wp_set_object_terms( $product_id, 'exclude-from-search', 'product_visibility', true );
-		} elseif ( 'search' === $visibility ) {
-			wp_set_object_terms( $product_id, 'exclude-from-catalog', 'product_visibility' );
-			wp_remove_object_terms( $product_id, 'exclude-from-search', 'product_visibility' );
-		} else {
-			// 'visible' — the default. Remove all exclusion terms so the product appears everywhere.
-			wp_remove_object_terms( $product_id, $remove_terms, 'product_visibility' );
-		}
-
-			if ( isset( $input['category_ids'] ) && is_array( $input['category_ids'] ) ) {
-				wp_set_object_terms( $product_id, array_map( 'absint', $input['category_ids'] ), 'product_cat' );
-			}
-			if ( isset( $input['tag_ids'] ) && is_array( $input['tag_ids'] ) ) {
-				wp_set_object_terms( $product_id, array_map( 'absint', $input['tag_ids'] ), 'product_tag' );
-			}
-
 			if ( isset( $input['featured_image_id'] ) ) {
 				$product->set_image_id( (int) $input['featured_image_id'] );
-				$product->save();
+			}
+			if ( isset( $input['category_ids'] ) && is_array( $input['category_ids'] ) ) {
+				$product->set_category_ids( array_map( 'absint', $input['category_ids'] ) );
+			}
+			if ( isset( $input['tag_ids'] ) && is_array( $input['tag_ids'] ) ) {
+				$product->set_tag_ids( array_map( 'absint', $input['tag_ids'] ) );
 			}
 			if ( isset( $input['gallery_image_ids'] ) && is_array( $input['gallery_image_ids'] ) ) {
 				$product->set_gallery_image_ids( array_map( 'absint', $input['gallery_image_ids'] ) );
-				$product->save();
 			}
-
 			if ( isset( $input['downloads'] ) && is_array( $input['downloads'] ) && $product->is_downloadable() ) {
 				$downloads = array();
 				foreach ( $input['downloads'] as $dl ) {
 					$download = new \WC_Product_Download();
-					if ( ! empty( $dl['download_id'] ) ) {
-						$download->set_id( sanitize_text_field( $dl['download_id'] ) );
-					}
+					if ( ! empty( $dl['download_id'] ) ) { $download->set_id( sanitize_text_field( $dl['download_id'] ) ); }
+					$file = MCP_WC_Ability_Execution_Module::validate_outbound_https_url( (string) $dl['file'] );
+					if ( is_wp_error( $file ) ) { return $file; }
 					$download->set_name( sanitize_text_field( $dl['name'] ) );
-					$download->set_file( esc_url_raw( $dl['file'] ) );
+					$download->set_file( $file );
 					$downloads[] = $download;
 				}
 				$product->set_downloads( $downloads );
-				$product->save();
 			}
+
+			$product_id = $product->save();
 
 			$product = wc_get_product( $product_id );
 			return array( 'product' => mcp_wc_format_product( $product ) );
 			} catch ( \Throwable $e ) {
-				return array( 'error' => $e->getMessage() . ' [' . basename($e->getFile()) . ':' . $e->getLine() . ']' );
+				if ( $product instanceof \WC_Product && $product->get_id() > 0 ) {
+					try { $product->delete( true ); } catch ( \Throwable $cleanup_failure ) { /* Best-effort cleanup; return a safe failure below. */ }
+				}
+				return mcp_wc_error( 'mcp_wc_product_create_failed', 'The product could not be created.' );
 			}
 		},
 		'permission_callback' => function (): bool {
@@ -562,8 +543,8 @@ function mcp_wc_register_product_update(): void {
 			'name'               => array( 'type' => 'string' ),
 			'slug'               => array( 'type' => 'string', 'description' => 'URL slug. Auto-generated from name if omitted.' ),
 			'sku'                => array( 'type' => 'string' ),
-				'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-				'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'regular_price'      => array( 'type' => 'string', 'pattern' => '^(?:(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'sale_price'         => array( 'type' => 'string', 'pattern' => '^(?:(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
 				'description'        => array( 'type' => 'string' ),
 				'short_description'  => array( 'type' => 'string' ),
 				'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_product_statuses() ),
@@ -588,11 +569,12 @@ function mcp_wc_register_product_update(): void {
 				'gallery_image_ids'  => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ), 'description' => 'Media library attachment IDs for the product image gallery.' ),
 				'downloads'          => array(
 					'type'  => 'array',
+					'maxItems' => 100,
 					'items' => array(
 						'type'       => 'object',
 						'properties' => array(
 							'name'        => array( 'type' => 'string' ),
-							'file'        => array( 'type' => 'string', 'description' => 'File URL or path.' ),
+							'file'        => array( 'type' => 'string', 'format' => 'uri', 'description' => 'Public HTTPS download URL.' ),
 							'download_id' => array( 'type' => 'string', 'description' => 'Leave blank for new files, or provide ID to update an existing downloadable.' ),
 						),
 						'required'             => array( 'name', 'file' ),
@@ -625,7 +607,8 @@ function mcp_wc_register_product_update(): void {
 					'additionalProperties' => false,
 				) ),
 			),
-			'required'             => array( 'id' ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/product-update' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -635,8 +618,10 @@ function mcp_wc_register_product_update(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			try {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/product-update' );
+			if ( $confirmation ) { return $confirmation; }
 			$result = mcp_wc_get_product_or_error( (int) $input['id'], 'update' );
 			if ( ! $result['success'] ) {
 				return $result;
@@ -706,7 +691,9 @@ function mcp_wc_register_product_update(): void {
 			}
 
 			if ( isset( $input['external_url'] ) && method_exists( $product, 'set_product_url' ) ) {
-				$product->set_product_url( esc_url_raw( $input['external_url'] ) );
+				$external_url = MCP_WC_Ability_Execution_Module::validate_outbound_https_url( (string) $input['external_url'] );
+				if ( is_wp_error( $external_url ) ) { return $external_url; }
+				$product->set_product_url( $external_url );
 			}
 			if ( isset( $input['button_text'] ) && method_exists( $product, 'set_button_text' ) ) {
 				$product->set_button_text( sanitize_text_field( $input['button_text'] ) );
@@ -769,68 +756,41 @@ function mcp_wc_register_product_update(): void {
 					}
 				}
 			}
-
-			$product->save();
-
-			// Ensure frontend visibility: WC 10.9 set_catalog_visibility does not reliably persist _visibility meta
-			if ( isset( $input['catalog_visibility'] ) ) {
-				$visibility = sanitize_text_field( $input['catalog_visibility'] );
-				update_post_meta( $product->get_id(), '_visibility', $visibility );
-
-				// Product visibility taxonomy: remove exclusion terms to make product visible.
-				$remove_terms = array( 'exclude-from-catalog', 'exclude-from-search' );
-				if ( 'hidden' === $visibility ) {
-					wp_set_object_terms( $product->get_id(), 'exclude-from-catalog', 'product_visibility' );
-					wp_set_object_terms( $product->get_id(), 'exclude-from-search', 'product_visibility', true );
-				} elseif ( 'catalog' === $visibility ) {
-					wp_remove_object_terms( $product->get_id(), 'exclude-from-catalog', 'product_visibility' );
-					wp_set_object_terms( $product->get_id(), 'exclude-from-search', 'product_visibility', true );
-				} elseif ( 'search' === $visibility ) {
-					wp_set_object_terms( $product->get_id(), 'exclude-from-catalog', 'product_visibility' );
-					wp_remove_object_terms( $product->get_id(), 'exclude-from-search', 'product_visibility' );
-				} else {
-					wp_remove_object_terms( $product->get_id(), $remove_terms, 'product_visibility' );
-				}
-			}
-
 			if ( isset( $input['category_ids'] ) && is_array( $input['category_ids'] ) ) {
-				wp_set_object_terms( $product->get_id(), array_map( 'absint', $input['category_ids'] ), 'product_cat' );
+				$product->set_category_ids( array_map( 'absint', $input['category_ids'] ) );
 			}
 			if ( isset( $input['tag_ids'] ) && is_array( $input['tag_ids'] ) ) {
-				wp_set_object_terms( $product->get_id(), array_map( 'absint', $input['tag_ids'] ), 'product_tag' );
+				$product->set_tag_ids( array_map( 'absint', $input['tag_ids'] ) );
 			}
-
 			if ( isset( $input['featured_image_id'] ) ) {
 				$product->set_image_id( (int) $input['featured_image_id'] );
-				$product->save();
 			}
 			if ( isset( $input['gallery_image_ids'] ) && is_array( $input['gallery_image_ids'] ) ) {
 				$product->set_gallery_image_ids( array_map( 'absint', $input['gallery_image_ids'] ) );
-				$product->save();
 			}
-
 			if ( isset( $input['downloads'] ) && is_array( $input['downloads'] ) && $product->is_downloadable() ) {
 				$downloads = array();
 				foreach ( $input['downloads'] as $dl ) {
 					$download = new \WC_Product_Download();
-					if ( ! empty( $dl['download_id'] ) ) {
-						$download->set_id( sanitize_text_field( $dl['download_id'] ) );
-					}
+					if ( ! empty( $dl['download_id'] ) ) { $download->set_id( sanitize_text_field( $dl['download_id'] ) ); }
+					$file = MCP_WC_Ability_Execution_Module::validate_outbound_https_url( (string) $dl['file'] );
+					if ( is_wp_error( $file ) ) { return $file; }
 					$download->set_name( sanitize_text_field( $dl['name'] ) );
-					$download->set_file( esc_url_raw( $dl['file'] ) );
+					$download->set_file( $file );
 					$downloads[] = $download;
 				}
 				$product->set_downloads( $downloads );
-				$product->save();
 			}
+
+			$product->save();
 
 			return array( 'product' => mcp_wc_format_product( wc_get_product( $product->get_id() ) ) );
 			} catch ( \Throwable $e ) {
-				return array( 'error' => $e->getMessage() . ' [' . basename($e->getFile()) . ':' . $e->getLine() . ']' );
+				return mcp_wc_error( 'mcp_wc_product_update_failed', 'The product could not be updated.' );
 			}
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_products' );
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['id'] ) && MCP_WC_Ability_Execution_Module::can_edit_product( (int) $input['id'] );
 		},
 		'meta'                => array(
 			'annotations' => array(
@@ -854,8 +814,9 @@ function mcp_wc_register_product_delete(): void {
 			'properties'           => array(
 				'id'    => array( 'type' => 'integer', 'minimum' => 1 ),
 				'force' => array( 'type' => 'boolean', 'default' => false ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/product-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -866,7 +827,9 @@ function mcp_wc_register_product_delete(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/product-delete' );
+			if ( $confirmation ) { return $confirmation; }
 			$result = mcp_wc_get_product_or_error( (int) $input['id'], 'delete' );
 			if ( ! $result['success'] ) {
 				return $result;
@@ -880,8 +843,8 @@ function mcp_wc_register_product_delete(): void {
 				'id'      => (int) $input['id'],
 			);
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_products' );
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['id'] ) && MCP_WC_Ability_Execution_Module::can_delete_product( (int) $input['id'] );
 		},
 		'meta'                => array(
 			'annotations' => array(
@@ -920,7 +883,7 @@ function mcp_wc_register_variations_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'edit_products' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -954,8 +917,8 @@ function mcp_wc_register_variations_query(): void {
 				'per_page'    => $per_page,
 			);
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_products' );
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['product_id'] ) && MCP_WC_Ability_Execution_Module::can_read_product( (int) $input['product_id'] );
 		},
 		'meta'                => array(
 			'annotations' => array(
@@ -978,8 +941,8 @@ function mcp_wc_register_variation_create(): void {
 				'product_id'     => array( 'type' => 'integer', 'minimum' => 1 ),
 				'attributes'     => array( 'type' => 'object', 'description' => 'Attribute slug => option value pairs.', 'additionalProperties' => array( 'type' => 'string' ) ),
 				'sku'            => array( 'type' => 'string' ),
-				'regular_price'  => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-				'sale_price'     => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'regular_price'  => array( 'type' => 'string', 'pattern' => '^(?:(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'sale_price'     => array( 'type' => 'string', 'pattern' => '^(?:(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
 				'manage_stock'   => array( 'type' => 'boolean' ),
 				'stock_quantity' => array( 'type' => 'integer' ),
 				'stock_status'   => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
@@ -996,7 +959,7 @@ function mcp_wc_register_variation_create(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'edit_products' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1031,8 +994,8 @@ function mcp_wc_register_variation_create(): void {
 
 			return array( 'variation' => mcp_wc_format_product( wc_get_product( $variation_id ) ) );
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_products' );
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['product_id'] ) && MCP_WC_Ability_Execution_Module::can_edit_product( (int) $input['product_id'] );
 		},
 		'meta'                => array(
 			'annotations' => array(
@@ -1054,8 +1017,8 @@ function mcp_wc_register_variation_update(): void {
 			'properties'           => array(
 				'id'             => array( 'type' => 'integer', 'minimum' => 1 ),
 				'sku'            => array( 'type' => 'string' ),
-				'regular_price'  => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
-				'sale_price'     => array( 'type' => 'string', 'pattern' => '^(?:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'regular_price'  => array( 'type' => 'string', 'pattern' => '^(?:(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
+				'sale_price'     => array( 'type' => 'string', 'pattern' => '^(?:(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|)$' ),
 				'manage_stock'   => array( 'type' => 'boolean' ),
 				'stock_quantity' => array( 'type' => 'integer' ),
 				'stock_status'   => array( 'type' => 'string', 'enum' => array( 'instock', 'outofstock', 'onbackorder' ) ),
@@ -1072,7 +1035,7 @@ function mcp_wc_register_variation_update(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'edit_products' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1098,8 +1061,8 @@ function mcp_wc_register_variation_update(): void {
 
 			return array( 'variation' => mcp_wc_format_product( wc_get_product( $variation->get_id() ) ) );
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_products' );
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['id'] ) && MCP_WC_Ability_Execution_Module::can_edit_product( (int) $input['id'] );
 		},
 		'meta'                => array(
 			'annotations' => array(
@@ -1121,8 +1084,9 @@ function mcp_wc_register_variation_delete(): void {
 			'properties'           => array(
 				'id'    => array( 'type' => 'integer', 'minimum' => 1 ),
 				'force' => array( 'type' => 'boolean', 'default' => true ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/variation-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -1133,7 +1097,9 @@ function mcp_wc_register_variation_delete(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/variation-delete' );
+			if ( $confirmation ) { return $confirmation; }
 			if ( ! current_user_can( 'edit_products' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1148,8 +1114,8 @@ function mcp_wc_register_variation_delete(): void {
 
 			return array( 'deleted' => (bool) $success, 'id' => (int) $input['id'] );
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_products' );
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['id'] ) && MCP_WC_Ability_Execution_Module::can_delete_product( (int) $input['id'] );
 		},
 		'meta'                => array(
 			'annotations' => array(
@@ -1206,7 +1172,7 @@ function mcp_wc_register_categories_query(): void {
 			),
 			'additionalProperties' => false,
 		) ),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1286,7 +1252,7 @@ function mcp_wc_register_category_create(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1347,7 +1313,7 @@ function mcp_wc_register_category_update(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1385,8 +1351,9 @@ function mcp_wc_register_category_delete(): void {
 			'type'                 => 'object',
 			'properties'           => array(
 				'id' => array( 'type' => 'integer', 'minimum' => 1 ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/category-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -1397,7 +1364,8 @@ function mcp_wc_register_category_delete(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/category-delete' ); if ( $confirmation ) { return $confirmation; }
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1449,7 +1417,7 @@ function mcp_wc_register_tags_query(): void {
 			),
 			'additionalProperties' => false,
 		) ),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1527,7 +1495,7 @@ function mcp_wc_register_tag_create(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1564,11 +1532,12 @@ function mcp_wc_register_tag_update(): void {
 			'type'                 => 'object',
 			'properties'           => array(
 				'id'          => array( 'type' => 'integer', 'minimum' => 1 ),
+				'attribute_id' => array( 'type' => 'integer', 'minimum' => 1 ),
 				'name'        => array( 'type' => 'string' ),
 				'slug'        => array( 'type' => 'string' ),
 				'description' => array( 'type' => 'string' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'attribute_id' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -1586,7 +1555,7 @@ function mcp_wc_register_tag_update(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1623,8 +1592,9 @@ function mcp_wc_register_tag_delete(): void {
 			'type'                 => 'object',
 			'properties'           => array(
 				'id' => array( 'type' => 'integer', 'minimum' => 1 ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/tag-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -1635,7 +1605,8 @@ function mcp_wc_register_tag_delete(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/tag-delete' ); if ( $confirmation ) { return $confirmation; }
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1687,7 +1658,7 @@ function mcp_wc_register_attributes_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1755,7 +1726,7 @@ function mcp_wc_register_attribute_terms_query(): void {
 			),
 			'additionalProperties' => false,
 		) ),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1837,7 +1808,7 @@ function mcp_wc_register_attribute_term_create(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1871,12 +1842,13 @@ function mcp_wc_register_attribute_term_update(): void {
 		'input_schema'        => array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'id'          => array( 'type' => 'integer', 'minimum' => 1 ),
+				'id'           => array( 'type' => 'integer', 'minimum' => 1 ),
+				'attribute_id' => array( 'type' => 'integer', 'minimum' => 1 ),
 				'name'        => array( 'type' => 'string' ),
 				'slug'        => array( 'type' => 'string' ),
 				'description' => array( 'type' => 'string' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'attribute_id' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -1888,13 +1860,19 @@ function mcp_wc_register_attribute_term_update(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
+			$attribute = wc_get_attribute( (int) $input['attribute_id'] );
+			if ( ! $attribute ) { return mcp_wc_error( 'mcp_wc_attribute_not_found', 'Attribute not found.' ); }
+			$taxonomy = wc_attribute_taxonomy_name( $attribute->slug );
+			if ( ! MCP_WC_Ability_Execution_Module::can_manage_taxonomy( $taxonomy ) ) {
+				return mcp_wc_error( 'mcp_wc_forbidden_term', 'You do not have permission to manage this attribute taxonomy.' );
+			}
 			$id = (int) $input['id'];
-			$term = get_term( $id );
+			$term = get_term( $id, $taxonomy );
 			if ( ! $term || is_wp_error( $term ) ) { return array( 'error' => 'Term not found.' ); }
 
 			$args = array();
@@ -1902,10 +1880,10 @@ function mcp_wc_register_attribute_term_update(): void {
 			if ( isset( $input['slug'] ) ) { $args['slug'] = sanitize_title( $input['slug'] ); }
 			if ( isset( $input['description'] ) ) { $args['description'] = wp_kses_post( $input['description'] ); }
 
-			$result = wp_update_term( $id, $term->taxonomy, $args );
+			$result = wp_update_term( $id, $taxonomy, $args );
 			if ( is_wp_error( $result ) ) { return array( 'error' => $result->get_error_message() ); }
 
-			$term = get_term( $id, $term->taxonomy );
+			$term = get_term( $id, $taxonomy );
 			return array( 'term' => array( 'id' => $term->term_id, 'name' => $term->name, 'slug' => $term->slug, 'description' => $term->description, 'count' => (int) $term->count ) );
 		},
 		'permission_callback' => function (): bool { return current_user_can( 'manage_product_terms' ); },
@@ -1921,9 +1899,11 @@ function mcp_wc_register_attribute_term_delete(): void {
 		'input_schema'        => array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'id' => array( 'type' => 'integer', 'minimum' => 1 ),
+				'id'           => array( 'type' => 'integer', 'minimum' => 1 ),
+				'attribute_id' => array( 'type' => 'integer', 'minimum' => 1 ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/attribute-term-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'attribute_id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -1934,16 +1914,24 @@ function mcp_wc_register_attribute_term_delete(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/attribute-term-delete' );
+			if ( $confirmation ) { return $confirmation; }
+			$attribute = wc_get_attribute( (int) $input['attribute_id'] );
+			if ( ! $attribute ) { return mcp_wc_error( 'mcp_wc_attribute_not_found', 'Attribute not found.' ); }
+			$taxonomy = wc_attribute_taxonomy_name( $attribute->slug );
+			if ( ! MCP_WC_Ability_Execution_Module::can_manage_taxonomy( $taxonomy ) ) {
+				return mcp_wc_error( 'mcp_wc_forbidden_term', 'You do not have permission to manage this attribute taxonomy.' );
+			}
 			$id = (int) $input['id'];
-			$term = get_term( $id );
+			$term = get_term( $id, $taxonomy );
 			if ( ! $term || is_wp_error( $term ) ) { return array( 'error' => 'Term not found.' ); }
 
-			$result = wp_delete_term( $id, $term->taxonomy );
+			$result = wp_delete_term( $id, $taxonomy );
 			return array( 'deleted' => ! is_wp_error( $result ) && true === $result, 'id' => $id );
 		},
 		'permission_callback' => function (): bool { return current_user_can( 'manage_product_terms' ); },
@@ -1977,7 +1965,7 @@ function mcp_wc_register_attribute_create(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -2050,7 +2038,7 @@ function mcp_wc_register_attribute_update(): void {
 			'properties' => array( 'attribute' => array( 'type' => 'object' ) ),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -2096,8 +2084,9 @@ function mcp_wc_register_attribute_delete(): void {
 			'type'                 => 'object',
 			'properties'           => array(
 				'id' => array( 'type' => 'integer', 'minimum' => 1 ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/attribute-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -2105,7 +2094,8 @@ function mcp_wc_register_attribute_delete(): void {
 			'properties' => array( 'deleted' => array( 'type' => 'boolean' ), 'id' => array( 'type' => 'integer' ) ),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/attribute-delete' ); if ( $confirmation ) { return $confirmation; }
 			if ( ! current_user_can( 'manage_product_terms' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -2133,7 +2123,7 @@ function mcp_wc_register_product_meta_query(): void {
 			'type'       => 'object',
 			'properties' => array(
 				'product_id' => array( 'type' => 'integer', 'minimum' => 1 ),
-				'keys'       => array( 'type' => 'array', 'items' => array( 'type' => 'string' ), 'description' => 'Specific meta keys to retrieve. If empty, returns all product meta.' ),
+				'keys'       => array( 'type' => 'array', 'maxItems' => 100, 'items' => array( 'type' => 'string' ), 'description' => 'Specific public meta keys to retrieve. Protected keys require an explicit server-side allowlist.' ),
 			),
 			'required'   => array( 'product_id' ),
 			'additionalProperties' => false,
@@ -2145,10 +2135,7 @@ function mcp_wc_register_product_meta_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback' => function( array $input ): array {
-			if ( ! current_user_can( 'edit_products' ) ) {
-				return array( 'error' => 'Permission denied.' );
-			}
+		'execute_callback' => function( array $input ) {
 			$product = wc_get_product( (int) $input['product_id'] );
 			if ( ! $product ) {
 				return array( 'error' => 'Product not found.' );
@@ -2157,17 +2144,58 @@ function mcp_wc_register_product_meta_query(): void {
 			$filtered = array();
 			$keys = $input['keys'] ?? array();
 			foreach ( $all_meta as $key => $values ) {
-				if ( ! empty( $keys ) && ! in_array( $key, $keys, true ) ) {
+				if ( ! mcp_wc_product_meta_key_allowed( $key, false ) || ( ! empty( $keys ) && ! in_array( $key, $keys, true ) ) ) {
 					continue;
 				}
 				$filtered[ $key ] = count( $values ) === 1 ? $values[0] : $values;
 			}
 			return array( 'meta' => $filtered );
 		},
-		'permission_callback' => function(): bool {
-			return current_user_can( 'edit_products' );
+		'permission_callback' => function( array $input ): bool {
+			return isset( $input['product_id'] ) && MCP_WC_Ability_Execution_Module::can_edit_product( (int) $input['product_id'] );
 		},
 		'meta' => array( 'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ) ),
+	) );
+}
+
+function mcp_wc_product_meta_key_allowed( string $key, bool $write ): bool {
+	if ( '' === $key || ! preg_match( '/^[A-Za-z0-9_.:-]+$/', $key ) ) { return false; }
+	if ( ! str_starts_with( $key, '_' ) ) { return true; }
+	$allowed = apply_filters( 'mcp_wc_allowed_protected_product_meta_keys', array(), $write );
+	return is_array( $allowed ) && in_array( $key, $allowed, true );
+}
+
+function mcp_wc_register_product_meta_update(): void {
+	mcp_wc_register_ability( 'woocommerce-mcp/product-meta-update', array(
+		'label' => 'Update product meta', 'description' => 'Write explicitly named public product meta keys.', 'category' => 'site',
+		'input_schema' => array(
+			'type' => 'object',
+			'properties' => array(
+				'product_id' => array( 'type' => 'integer', 'minimum' => 1 ),
+				'meta' => array( 'type' => 'object', 'maxProperties' => 100, 'additionalProperties' => array( 'type' => array( 'string', 'number', 'integer', 'boolean', 'null' ) ) ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/product-meta-update' ),
+			),
+			'required' => array( 'product_id', 'meta', 'confirm_dangerous_action' ), 'additionalProperties' => false,
+		),
+		'output_schema' => array( 'type' => 'object', 'properties' => array( 'updated_keys' => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ) ), 'additionalProperties' => false ),
+		'execute_callback' => function( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/product-meta-update' );
+			if ( $confirmation ) { return $confirmation; }
+			$product_id = (int) $input['product_id'];
+			if ( ! wc_get_product( $product_id ) ) { return mcp_wc_error( 'mcp_wc_product_not_found', 'Product not found.' ); }
+			$updates = array();
+			foreach ( (array) $input['meta'] as $key => $value ) {
+				$key = (string) $key;
+				if ( ! mcp_wc_product_meta_key_allowed( $key, true ) ) { return mcp_wc_error( 'mcp_wc_product_meta_key_forbidden', 'A requested product meta key is protected or invalid.' ); }
+				$updates[ $key ] = null === $value ? null : sanitize_text_field( (string) $value );
+			}
+			foreach ( $updates as $key => $value ) {
+				if ( null === $value ) { delete_post_meta( $product_id, $key ); } else { update_post_meta( $product_id, $key, $value ); }
+			}
+			return array( 'updated_keys' => array_keys( $updates ) );
+		},
+		'permission_callback' => function( array $input ): bool { return isset( $input['product_id'] ) && MCP_WC_Ability_Execution_Module::can_edit_product( (int) $input['product_id'] ); },
+		'meta' => array( 'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => true ) ),
 	) );
 }
 
@@ -2196,7 +2224,7 @@ function mcp_wc_register_product_duplicate(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'edit_products' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -2206,6 +2234,7 @@ function mcp_wc_register_product_duplicate(): void {
 				return array( 'error' => 'Product not found.' );
 			}
 
+			if ( ! class_exists( 'WC_Admin_Duplicate_Product' ) ) { require_once WC_ABSPATH . 'includes/admin/class-wc-admin-duplicate-product.php'; }
 			$duplicate = ( new \WC_Admin_Duplicate_Product() )->product_duplicate( $original );
 
 			if ( isset( $input['name'] ) ) {
@@ -2222,8 +2251,8 @@ function mcp_wc_register_product_duplicate(): void {
 
 			return array( 'product' => mcp_wc_format_product( wc_get_product( $duplicate->get_id() ) ) );
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_products' );
+		'permission_callback' => function ( array $input ): bool {
+			return current_user_can( 'edit_products' ) && isset( $input['id'] ) && MCP_WC_Ability_Execution_Module::can_read_product( (int) $input['id'] );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => false, 'idempotent' => false ),
@@ -2241,7 +2270,7 @@ function mcp_wc_register_products_bulk_stock(): void {
 		'input_schema'        => array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'products' => array( 'type' => 'array', 'items' => array(
+				'products' => array( 'type' => 'array', 'minItems' => 1, 'maxItems' => 100, 'items' => array(
 					'type'       => 'object',
 					'properties' => array(
 						'id'             => array( 'type' => 'integer', 'minimum' => 1 ),
@@ -2252,51 +2281,55 @@ function mcp_wc_register_products_bulk_stock(): void {
 					'required'   => array( 'id' ),
 					'additionalProperties' => false,
 				) ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/products-bulk-stock' ),
 			),
-			'required'             => array( 'products' ),
+			'required'             => array( 'products', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
 			'type'       => 'object',
 			'properties' => array(
 				'updated' => array( 'type' => 'integer' ),
-				'errors'  => array( 'type' => 'array', 'items' => array( 'type' => 'object' ) ),
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! current_user_can( 'edit_products' ) ) {
-				return array( 'error' => 'Permission denied.' );
-			}
-
-			$updated = 0;
-			$errors  = array();
-
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/products-bulk-stock' );
+			if ( $confirmation ) { return $confirmation; }
+			$rows = array(); $snapshots = array();
 			foreach ( $input['products'] as $item ) {
 				$product = wc_get_product( (int) $item['id'] );
-				if ( ! $product ) {
-					$errors[] = array( 'id' => (int) $item['id'], 'error' => 'Product not found.' );
-					continue;
-				}
-
-				if ( isset( $item['manage_stock'] ) ) {
-					$product->set_manage_stock( (bool) $item['manage_stock'] );
-				}
-				if ( isset( $item['stock_quantity'] ) && $product->get_manage_stock() ) {
-					$product->set_stock_quantity( (int) $item['stock_quantity'] );
-				}
-				if ( isset( $item['stock_status'] ) ) {
-					$product->set_stock_status( sanitize_text_field( $item['stock_status'] ) );
-				}
-
-				$product->save();
-				++$updated;
+				if ( ! $product ) { return mcp_wc_error( 'mcp_wc_product_not_found', 'Every bulk-stock item must reference an existing product.' ); }
+				if ( ! MCP_WC_Ability_Execution_Module::can_edit_product( $product->get_id() ) ) { return mcp_wc_error( 'mcp_wc_forbidden_product', 'You do not have permission to edit every requested product.' ); }
+				$rows[] = array( 'product' => $product, 'input' => $item );
+				$snapshots[ $product->get_id() ] = array( $product->get_manage_stock(), $product->get_stock_quantity(), $product->get_stock_status() );
 			}
-
-			return array( 'updated' => $updated, 'errors' => $errors );
+			try {
+				foreach ( $rows as $row ) {
+					$product = $row['product']; $item = $row['input'];
+					if ( isset( $item['manage_stock'] ) ) { $product->set_manage_stock( (bool) $item['manage_stock'] ); }
+					if ( isset( $item['stock_quantity'] ) && $product->get_manage_stock() ) { $product->set_stock_quantity( (int) $item['stock_quantity'] ); }
+					if ( isset( $item['stock_status'] ) ) { $product->set_stock_status( sanitize_text_field( $item['stock_status'] ) ); }
+					$product->save();
+				}
+			} catch ( Throwable $throwable ) {
+				$rollback_failed = false;
+				foreach ( $rows as $row ) {
+					$product = wc_get_product( $row['product']->get_id() );
+					if ( ! $product ) { continue; }
+					try {
+						$old = $snapshots[ $product->get_id() ]; $product->set_manage_stock( $old[0] ); $product->set_stock_quantity( $old[1] ); $product->set_stock_status( $old[2] ); $product->save();
+					} catch ( Throwable $rollback_failure ) { $rollback_failed = true; }
+				}
+				if ( $rollback_failed ) { return mcp_wc_error( 'mcp_wc_bulk_stock_rollback_failed', 'The bulk stock change failed and prior values could not be fully restored.' ); }
+				return mcp_wc_error( 'mcp_wc_bulk_stock_failed', 'The bulk stock change failed and prior values were restored.' );
+			}
+			return array( 'updated' => count( $rows ) );
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_products' );
+		'permission_callback' => function ( array $input ): bool {
+			if ( ! isset( $input['products'] ) || ! is_array( $input['products'] ) ) { return false; }
+			foreach ( $input['products'] as $item ) { if ( ! isset( $item['id'] ) || ! MCP_WC_Ability_Execution_Module::can_edit_product( (int) $item['id'] ) ) { return false; } }
+			return true;
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),

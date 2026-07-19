@@ -3,13 +3,14 @@
  * Plugin Name: MCP Abilities for WooCommerce
  * Plugin URI: https://devenia.com/plugins/mcp-abilities-for-woocommerce/
  * Description: Comprehensive WooCommerce abilities for MCP. Products, orders, coupons, customers, reports, settings, reviews, shipping, tax, and webhooks.
- * Version: 0.2.0
+ * Version: 0.2.11
  * Author: basicus
  * Author URI: https://profiles.wordpress.org/basicus/
  * License: GPL-2.0+
  * License URI: http://www.gnu.org/licenses/gpl-2.0.txt
  * Requires at least: 6.9
  * Requires PHP: 8.0
+ * Requires Plugins: woocommerce
  * Text Domain: mcp-abilities-for-woocommerce
  *
  * @package MCP_Abilities_WooCommerce
@@ -27,7 +28,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 function mcp_wc_check_dependencies(): bool {
 	if ( ! function_exists( 'wp_register_ability' ) ) {
 		add_action( 'admin_notices', function () {
-			echo '<div class="notice notice-error"><p><strong>MCP Abilities for WooCommerce</strong> requires the <a href="https://github.com/WordPress/abilities-api">Abilities API</a> plugin to be installed and activated.</p></div>';
+			echo '<div class="notice notice-error"><p><strong>MCP Abilities for WooCommerce</strong> requires the <a href="https://developer.wordpress.org/news/2025/11/introducing-the-wordpress-abilities-api/">WordPress Abilities API</a> included with WordPress 6.9 or newer.</p></div>';
 		} );
 		return false;
 	}
@@ -48,22 +49,6 @@ function mcp_wc_get_currency(): string {
 function mcp_wc_get_currency_symbol(): string {
 	return function_exists( 'get_woocommerce_currency_symbol' ) ? get_woocommerce_currency_symbol() : '$';
 }
-
-/**
- * Allow per-site currency symbol overrides via the 'mcp_wc_currency_symbol_overrides' option.
- * Store as JSON object, e.g. {"NOK":"NOK","SEK":"SEK"}.
- */
-add_filter( 'woocommerce_currency_symbol', function ( $symbol, $currency ) {
-	$overrides = get_option( 'mcp_wc_currency_symbol_overrides', '' );
-	if ( ! is_string( $overrides ) || '' === $overrides ) {
-		return $symbol;
-	}
-	$map = json_decode( $overrides, true );
-	if ( ! is_array( $map ) ) {
-		return $symbol;
-	}
-	return $map[ $currency ] ?? $symbol;
-}, 10, 2 );
 
 /**
  * WC order status slugs for input (without wc- prefix), derived from WC's registered statuses.
@@ -99,7 +84,10 @@ function mcp_wc_all_order_statuses(): array {
 	if ( ! function_exists( 'wc_get_order_statuses' ) ) {
 		return array( 'pending', 'failed', 'on-hold', 'completed', 'processing', 'refunded', 'cancelled', 'trash' );
 	}
-	return array_keys( wc_get_order_statuses() );
+	return array_map(
+		static fn( string $status ): string => str_replace( 'wc-', '', $status ),
+		array_keys( wc_get_order_statuses() )
+	);
 }
 
 /**
@@ -290,6 +278,21 @@ function mcp_wc_format_coupon( \WC_Coupon $coupon ): array {
 	);
 }
 
+function mcp_wc_coupon_output_schema(): array {
+	$properties = array(
+		'id' => array( 'type' => 'integer' ), 'code' => array( 'type' => 'string' ), 'description' => array( 'type' => 'string' ),
+		'discount_type' => array( 'type' => 'string' ), 'amount' => array( 'type' => 'string' ), 'individual_use' => array( 'type' => 'boolean' ),
+		'product_ids' => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ), 'excluded_product_ids' => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
+		'product_categories' => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ), 'excluded_product_categories' => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
+		'usage_limit' => array( 'type' => 'integer' ), 'usage_limit_per_user' => array( 'type' => 'integer' ), 'usage_count' => array( 'type' => 'integer' ),
+		'minimum_amount' => array( 'type' => 'string' ), 'maximum_amount' => array( 'type' => 'string' ), 'free_shipping' => array( 'type' => 'boolean' ),
+	);
+	foreach ( array( 'date_expires', 'date_expires_gmt', 'date_created', 'date_created_gmt', 'date_modified', 'date_modified_gmt' ) as $date ) {
+		$properties[ $date ] = array( 'type' => array( 'string', 'null' ), 'format' => 'date-time' );
+	}
+	return array( 'type' => 'object', 'properties' => $properties, 'additionalProperties' => false );
+}
+
 /**
  * Convert WC_DateTime to ISO 8601 string.
  */
@@ -451,11 +454,12 @@ function mcp_wc_paginated_schema( array $items_schema ): array {
  * @param array<string,mixed>  $args Registration arguments.
  * @return void
  */
+require_once __DIR__ . '/includes/class-ability-execution-module.php';
+require_once __DIR__ . '/includes/class-order-lifecycle-module.php';
+require_once __DIR__ . '/includes/class-commerce-administration-module.php';
+
 function mcp_wc_register_ability( string $name, array $args ): void {
-	if ( function_exists( 'wp_has_ability' ) && wp_has_ability( $name ) ) {
-		return;
-	}
-	wp_register_ability( $name, $args );
+	MCP_WC_Ability_Execution_Module::register( $name, $args );
 }
 
 require_once __DIR__ . '/includes/abilities-products.php';
@@ -465,6 +469,7 @@ require_once __DIR__ . '/includes/abilities-customers.php';
 require_once __DIR__ . '/includes/abilities-reports.php';
 require_once __DIR__ . '/includes/abilities-settings.php';
 require_once __DIR__ . '/includes/abilities-reviews.php';
+require_once __DIR__ . '/includes/abilities-administration.php';
 
 /**
  * Register WooCommerce abilities.
@@ -481,5 +486,17 @@ function mcp_register_woocommerce_abilities(): void {
 	mcp_wc_register_report_abilities();
 	mcp_wc_register_setting_abilities();
 	mcp_wc_register_review_abilities();
+	mcp_wc_register_administration_abilities();
 }
 add_action( 'wp_abilities_api_init', 'mcp_register_woocommerce_abilities' );
+
+add_action( 'admin_init', 'mcp_wc_check_dependencies' );
+add_action( 'admin_notices', static function (): void {
+	if ( ! current_user_can( 'manage_options' ) ) { return; }
+	$skipped = MCP_WC_Ability_Execution_Module::skipped_aliases();
+	if ( array() === $skipped ) { return; }
+	echo '<div class="notice notice-warning"><p><strong>' . esc_html__( 'MCP Abilities for WooCommerce:', 'mcp-abilities-for-woocommerce' ) . '</strong> ';
+	/* translators: %d: number of legacy compatibility aliases skipped because another component owns the name. */
+	echo esc_html( sprintf( _n( '%d compatibility alias was not registered because another component owns that name.', '%d compatibility aliases were not registered because another component owns those names.', count( $skipped ), 'mcp-abilities-for-woocommerce' ), count( $skipped ) ) );
+	echo '</p></div>';
+} );

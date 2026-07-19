@@ -35,6 +35,24 @@ function mcp_wc_settings_permission(): bool {
 	return current_user_can( 'manage_woocommerce' );
 }
 
+function mcp_wc_system_permission(): bool { return current_user_can( 'manage_options' ); }
+
+function mcp_wc_redact_system_paths( $value ) {
+	if ( is_array( $value ) ) { foreach ( $value as $key => $item ) { $value[ $key ] = mcp_wc_redact_system_paths( $item ); } return $value; }
+	if ( is_string( $value ) ) {
+		$replacements = array();
+		if ( defined( 'ABSPATH' ) ) { $replacements[ untrailingslashit( ABSPATH ) ] = '[wordpress-root]'; }
+		if ( defined( 'WP_CONTENT_DIR' ) ) { $replacements[ untrailingslashit( WP_CONTENT_DIR ) ] = '[content-dir]'; }
+		return str_replace( array_keys( $replacements ), array_values( $replacements ), $value );
+	}
+	return $value;
+}
+
+function mcp_wc_allowed_system_tools(): array {
+	$tools = apply_filters( 'mcp_wc_allowed_system_tools', array() );
+	return is_array( $tools ) ? array_values( array_filter( array_map( 'sanitize_key', $tools ) ) ) : array();
+}
+
 // ─── Store Settings ──────────────────────────────────────────────────────────
 
 function mcp_wc_register_store_settings(): void {
@@ -50,8 +68,16 @@ function mcp_wc_register_store_settings(): void {
 		'output_schema'       => array(
 			'type'       => 'object',
 			'properties' => array(
-				'store_address'         => array( 'type' => 'object' ),
-				'general'               => array( 'type' => 'object' ),
+				'store_address'         => array( 'type' => 'object', 'properties' => array(
+					'address_1' => array( 'type' => 'string' ), 'address_2' => array( 'type' => 'string' ), 'city' => array( 'type' => 'string' ),
+					'state' => array( 'type' => 'string' ), 'postcode' => array( 'type' => 'string' ), 'country' => array( 'type' => 'string' ),
+				), 'additionalProperties' => false ),
+				'general'               => array( 'type' => 'object', 'properties' => array(
+					'selling_countries' => array( 'type' => 'string' ), 'shipping_countries' => array( 'type' => 'string' ),
+					'default_customer_location' => array( 'type' => 'string' ), 'enable_coupons' => array( 'type' => 'string' ),
+					'calc_taxes' => array( 'type' => 'string' ), 'enable_guest_checkout' => array( 'type' => 'string' ),
+					'enable_signup_and_login_from_checkout' => array( 'type' => 'string' ),
+				), 'additionalProperties' => false ),
 				'currency'              => array( 'type' => 'string' ),
 				'currency_symbol'       => array( 'type' => 'string' ),
 				'currency_position'     => array( 'type' => 'string' ),
@@ -60,14 +86,17 @@ function mcp_wc_register_store_settings(): void {
 				'number_of_decimals'    => array( 'type' => 'integer' ),
 				'dimension_unit'        => array( 'type' => 'string' ),
 				'weight_unit'           => array( 'type' => 'string' ),
-				'allowed_countries'     => array( 'type' => array( 'string', 'array' ) ),
-				'shipping_countries'    => array( 'type' => array( 'string', 'array' ) ),
+				'allowed_countries'     => array( 'type' => 'string' ),
+				'selling_country_codes' => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
+				'excluded_country_codes' => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
+				'shipping_countries'    => array( 'type' => 'string' ),
+				'shipping_country_codes' => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
 				'default_customer_location' => array( 'type' => 'string' ),
 				'enable_guest_checkout' => array( 'type' => 'string' ),
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -99,7 +128,10 @@ function mcp_wc_register_store_settings(): void {
 				'dimension_unit'             => get_option( 'woocommerce_dimension_unit', 'cm' ),
 				'weight_unit'                => get_option( 'woocommerce_weight_unit', 'kg' ),
 				'allowed_countries'          => get_option( 'woocommerce_allowed_countries', 'all' ),
+				'selling_country_codes'      => array_values( array_filter( (array) get_option( 'woocommerce_specific_allowed_countries', array() ) ) ),
+				'excluded_country_codes'     => array_values( array_filter( (array) get_option( 'woocommerce_all_except_countries', array() ) ) ),
 				'shipping_countries'         => get_option( 'woocommerce_ship_to_countries', '' ),
+				'shipping_country_codes'     => array_values( array_filter( (array) get_option( 'woocommerce_specific_ship_to_countries', array() ) ) ),
 				'default_customer_location'  => get_option( 'woocommerce_default_customer_address', 'base' ),
 				'enable_guest_checkout'      => get_option( 'woocommerce_enable_guest_checkout', 'yes' ),
 			);
@@ -116,13 +148,12 @@ function mcp_wc_register_store_settings(): void {
 function mcp_wc_register_tax_rates_query(): void {
 	mcp_wc_register_ability( 'woocommerce/tax-rates-query', array(
 		'label'               => 'Query tax rates',
-		'description'         => 'List tax rates with optional filters.',
+		'description'         => 'List tax rates with bounded pagination through WooCommerce\'s administrative tax controller.',
 		'category'            => 'site',
 		'input_schema'        => array(
 			'type'                 => 'object',
 			'properties'           => array(
 				'id'      => array( 'type' => 'integer', 'minimum' => 1 ),
-				'country' => array( 'type' => 'string' ),
 				'class'   => array( 'type' => 'string' ),
 				'page'    => array( 'type' => 'integer', 'default' => 1, 'minimum' => 1 ),
 				'per_page' => array( 'type' => 'integer', 'default' => 25, 'minimum' => 1, 'maximum' => 100 ),
@@ -146,18 +177,13 @@ function mcp_wc_register_tax_rates_query(): void {
 			),
 			'additionalProperties' => false,
 		) ),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
 			$page     = (int) ( $input['page'] ?? 1 );
 			$per_page = min( 100, max( 1, (int) ( $input['per_page'] ?? 25 ) ) );
-			$args     = array(
-				'per_page' => $per_page,
-				'page'     => $page,
-			);
-
 			if ( isset( $input['id'] ) ) {
 				$rate = \WC_Tax::_get_tax_rate( (int) $input['id'] );
 				if ( ! $rate ) {
@@ -166,25 +192,30 @@ function mcp_wc_register_tax_rates_query(): void {
 				return array( 'items' => array( mcp_wc_format_tax_rate( $rate ) ), 'total_pages' => 1, 'page' => 1, 'per_page' => 1 );
 			}
 
-			if ( ! empty( $input['country'] ) ) {
-				$args['country'] = sanitize_text_field( $input['country'] );
-			}
-			if ( ! empty( $input['class'] ) ) {
-				$args['class'] = sanitize_text_field( $input['class'] );
+			if ( ! class_exists( 'WC_REST_Taxes_Controller' ) ) {
+				return mcp_wc_error( 'mcp_wc_tax_controller_unavailable', 'WooCommerce tax administration is unavailable.' );
 			}
 
-			$rates       = \WC_Tax::find_rates( $args );
-			$all_rates   = \WC_Tax::get_rates();
-			$total       = count( $all_rates );
-
-			$items = array();
-			foreach ( $rates as $rate ) {
-				$items[] = mcp_wc_format_tax_rate( $rate );
+			$request = new \WP_REST_Request( 'GET', '/wc/v3/taxes' );
+			$request->set_query_params( array(
+				'page'     => $page,
+				'per_page' => $per_page,
+				'order'    => 'asc',
+				'orderby'  => 'order',
+				'class'    => sanitize_text_field( (string) ( $input['class'] ?? '' ) ),
+				'context'  => 'view',
+			) );
+			$response = ( new \WC_REST_Taxes_Controller() )->get_items( $request );
+			if ( is_wp_error( $response ) ) {
+				return $response;
 			}
+			$response = rest_ensure_response( $response );
+			$headers  = $response->get_headers();
+			$items    = array_map( 'mcp_wc_format_rest_tax_rate', (array) $response->get_data() );
 
 			return array(
 				'items'       => $items,
-				'total_pages' => max( 1, (int) ceil( $total / $per_page ) ),
+				'total_pages' => (int) ( $headers['X-WP-TotalPages'] ?? 0 ),
 				'page'        => $page,
 				'per_page'    => $per_page,
 			);
@@ -194,6 +225,22 @@ function mcp_wc_register_tax_rates_query(): void {
 			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
 		),
 	) );
+}
+
+function mcp_wc_format_rest_tax_rate( array $rate ): array {
+	return array(
+		'id'        => (int) ( $rate['id'] ?? 0 ),
+		'country'   => (string) ( $rate['country'] ?? '' ),
+		'state'     => (string) ( $rate['state'] ?? '' ),
+		'postcode'  => isset( $rate['postcodes'] ) ? implode( ';', (array) $rate['postcodes'] ) : (string) ( $rate['postcode'] ?? '' ),
+		'city'      => isset( $rate['cities'] ) ? implode( ';', (array) $rate['cities'] ) : (string) ( $rate['city'] ?? '' ),
+		'rate'      => (string) ( $rate['rate'] ?? '' ),
+		'name'      => (string) ( $rate['name'] ?? '' ),
+		'priority'  => (int) ( $rate['priority'] ?? 0 ),
+		'compound'  => (bool) ( $rate['compound'] ?? false ),
+		'shipping'  => (bool) ( $rate['shipping'] ?? false ),
+		'tax_class' => (string) ( $rate['class'] ?? '' ),
+	);
 }
 
 function mcp_wc_format_tax_rate( array $rate ): array {
@@ -222,7 +269,7 @@ function mcp_wc_register_shipping_zones_query(): void {
 		'input_schema'        => array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'id' => array( 'type' => 'integer', 'minimum' => 1 ),
+				'id' => array( 'type' => 'integer', 'minimum' => 0 ),
 			),
 			'additionalProperties' => false,
 		),
@@ -243,14 +290,14 @@ function mcp_wc_register_shipping_zones_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
 			if ( isset( $input['id'] ) ) {
 				$zone = new \WC_Shipping_Zone( (int) $input['id'] );
-				if ( ! $zone->get_id() ) {
+				if ( 0 !== (int) $input['id'] && ! $zone->get_id() ) {
 					return array( 'zones' => array() );
 				}
 				return array( 'zones' => array( mcp_wc_format_shipping_zone( $zone ) ) );
@@ -261,6 +308,7 @@ function mcp_wc_register_shipping_zones_query(): void {
 			foreach ( $zones as $zone ) {
 				$items[] = mcp_wc_format_shipping_zone_data( $zone );
 			}
+			$items[] = mcp_wc_format_shipping_zone( new \WC_Shipping_Zone( 0 ) );
 			return array( 'zones' => $items );
 		},
 		'permission_callback' => 'mcp_wc_settings_permission',
@@ -339,7 +387,7 @@ function mcp_wc_register_shipping_methods_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -397,7 +445,7 @@ function mcp_wc_register_payment_gateways_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -444,43 +492,51 @@ function mcp_wc_register_webhooks_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'output_schema'       => mcp_wc_paginated_schema( array(
+		'output_schema'       => array(
 			'type'       => 'object',
 			'properties' => array(
+				'items' => array( 'type' => 'array', 'items' => array(
+					'type'       => 'object',
+					'properties' => array(
 				'id'            => array( 'type' => 'integer' ),
 				'name'          => array( 'type' => 'string' ),
 				'topic'         => array( 'type' => 'string' ),
 				'delivery_url'  => array( 'type' => 'string', 'format' => 'uri' ),
 				'status'        => array( 'type' => 'string' ),
-				'secret'        => array( 'type' => 'string' ),
 				'date_created'  => array( 'type' => array( 'string', 'null' ), 'format' => 'date-time' ),
+					),
+					'additionalProperties' => false,
+				) ),
+				'has_more' => array( 'type' => 'boolean' ),
+				'page'     => array( 'type' => 'integer' ),
+				'per_page' => array( 'type' => 'integer' ),
 			),
 			'additionalProperties' => false,
-		) ),
-		'execute_callback'    => function ( array $input ): array {
+		),
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
-			$data_store = \WC_Data_Store::load( 'webhook' );
 			$page       = (int) ( $input['page'] ?? 1 );
 			$per_page   = min( 100, max( 1, (int) ( $input['per_page'] ?? 25 ) ) );
 
 			if ( isset( $input['id'] ) ) {
 				$webhook = wc_get_webhook( (int) $input['id'] );
 				if ( ! $webhook ) {
-					return array( 'items' => array(), 'total_pages' => 0, 'page' => 1, 'per_page' => $per_page );
+					return array( 'items' => array(), 'has_more' => false, 'page' => 1, 'per_page' => $per_page );
 				}
-				return array( 'items' => array( mcp_wc_format_webhook( $webhook ) ), 'total_pages' => 1, 'page' => 1, 'per_page' => 1 );
+				return array( 'items' => array( mcp_wc_format_webhook( $webhook ) ), 'has_more' => false, 'page' => 1, 'per_page' => 1 );
 			}
 
-			$args = array( 'limit' => $per_page, 'page' => $page );
+			$args = array( 'limit' => $per_page + 1, 'offset' => ( $page - 1 ) * $per_page );
 			if ( ! empty( $input['status'] ) ) {
 				$args['status'] = sanitize_text_field( $input['status'] );
 			}
 
-			$webhooks     = wc_get_webhooks( 'ASC', $args );
-			$total_count  = count( wc_get_webhooks( 'ASC', array( 'limit' => -1 ) ) );
+			$webhooks = wc_get_webhooks( 'ASC', $args );
+			$has_more = count( $webhooks ) > $per_page;
+			$webhooks = array_slice( $webhooks, 0, $per_page );
 
 			$items = array();
 			foreach ( $webhooks as $webhook ) {
@@ -489,7 +545,7 @@ function mcp_wc_register_webhooks_query(): void {
 
 			return array(
 				'items'       => $items,
-				'total_pages' => max( 1, (int) ceil( $total_count / $per_page ) ),
+				'has_more'    => $has_more,
 				'page'        => $page,
 				'per_page'    => $per_page,
 			);
@@ -508,7 +564,6 @@ function mcp_wc_format_webhook( \WC_Webhook $webhook ): array {
 		'topic'        => $webhook->get_topic(),
 		'delivery_url' => $webhook->get_delivery_url(),
 		'status'       => $webhook->get_status(),
-		'secret'       => $webhook->get_secret(),
 		'date_created' => mcp_wc_date_to_iso( $webhook->get_date_created() ),
 	);
 }
@@ -527,9 +582,10 @@ function mcp_wc_register_webhook_create(): void {
 				'topic'        => array( 'type' => 'string', 'description' => 'Webhook topic, e.g. order.created, product.updated, coupon.created.' ),
 				'delivery_url' => array( 'type' => 'string', 'format' => 'uri' ),
 				'secret'       => array( 'type' => 'string', 'description' => 'Webhook secret for HMAC verification.' ),
-				'status'       => array( 'type' => 'string', 'enum' => array( 'active', 'paused', 'disabled' ), 'default' => 'active' ),
+				'status'       => array( 'type' => 'string', 'enum' => array( 'active', 'paused', 'disabled' ), 'default' => 'paused' ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/webhook-create' ),
 			),
-			'required'             => array( 'name', 'topic', 'delivery_url' ),
+			'required'             => array( 'name', 'topic', 'delivery_url', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -537,19 +593,24 @@ function mcp_wc_register_webhook_create(): void {
 			'properties' => array( 'webhook' => array( 'type' => 'object' ) ),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/webhook-create' );
+			if ( $confirmation ) { return $confirmation; }
+			$delivery_url = MCP_WC_Ability_Execution_Module::validate_outbound_https_url( (string) $input['delivery_url'] );
+			if ( is_wp_error( $delivery_url ) ) { return $delivery_url; }
+
 			$webhook = new \WC_Webhook();
 			$webhook->set_name( sanitize_text_field( $input['name'] ) );
 			$webhook->set_topic( sanitize_text_field( $input['topic'] ) );
-			$webhook->set_delivery_url( esc_url_raw( $input['delivery_url'] ) );
+			$webhook->set_delivery_url( $delivery_url );
 			if ( isset( $input['secret'] ) ) {
 				$webhook->set_secret( sanitize_text_field( $input['secret'] ) );
 			}
-			$webhook->set_status( $input['status'] ?? 'active' );
+			$webhook->set_status( $input['status'] ?? 'paused' );
 
 			$webhook_id = $webhook->save();
 			if ( ! $webhook_id ) {
@@ -560,7 +621,7 @@ function mcp_wc_register_webhook_create(): void {
 		},
 		'permission_callback' => 'mcp_wc_settings_permission',
 		'meta'                => array(
-			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
+			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false, 'externalAction' => true ),
 		),
 	) );
 }
@@ -579,8 +640,9 @@ function mcp_wc_register_webhook_update(): void {
 				'delivery_url' => array( 'type' => 'string', 'format' => 'uri' ),
 				'secret'       => array( 'type' => 'string' ),
 				'status'       => array( 'type' => 'string', 'enum' => array( 'active', 'paused', 'disabled' ) ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/webhook-update' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -588,11 +650,13 @@ function mcp_wc_register_webhook_update(): void {
 			'properties' => array( 'webhook' => array( 'type' => 'object' ) ),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/webhook-update' );
+			if ( $confirmation ) { return $confirmation; }
 			$webhook = wc_get_webhook( (int) $input['id'] );
 			if ( ! $webhook ) {
 				return array( 'error' => 'Webhook not found.' );
@@ -600,7 +664,11 @@ function mcp_wc_register_webhook_update(): void {
 
 			if ( isset( $input['name'] ) ) { $webhook->set_name( sanitize_text_field( $input['name'] ) ); }
 			if ( isset( $input['topic'] ) ) { $webhook->set_topic( sanitize_text_field( $input['topic'] ) ); }
-			if ( isset( $input['delivery_url'] ) ) { $webhook->set_delivery_url( esc_url_raw( $input['delivery_url'] ) ); }
+			if ( isset( $input['delivery_url'] ) ) {
+				$delivery_url = MCP_WC_Ability_Execution_Module::validate_outbound_https_url( (string) $input['delivery_url'] );
+				if ( is_wp_error( $delivery_url ) ) { return $delivery_url; }
+				$webhook->set_delivery_url( $delivery_url );
+			}
 			if ( isset( $input['secret'] ) ) { $webhook->set_secret( sanitize_text_field( $input['secret'] ) ); }
 			if ( isset( $input['status'] ) ) { $webhook->set_status( sanitize_text_field( $input['status'] ) ); }
 
@@ -610,7 +678,7 @@ function mcp_wc_register_webhook_update(): void {
 		},
 		'permission_callback' => 'mcp_wc_settings_permission',
 		'meta'                => array(
-			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
+			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false, 'externalAction' => true ),
 		),
 	) );
 }
@@ -625,8 +693,9 @@ function mcp_wc_register_webhook_delete(): void {
 			'properties'           => array(
 				'id'    => array( 'type' => 'integer', 'minimum' => 1 ),
 				'force' => array( 'type' => 'boolean', 'default' => true ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/webhook-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -634,11 +703,13 @@ function mcp_wc_register_webhook_delete(): void {
 			'properties' => array( 'deleted' => array( 'type' => 'boolean' ), 'id' => array( 'type' => 'integer' ) ),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
 
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/webhook-delete' );
+			if ( $confirmation ) { return $confirmation; }
 			$webhook = wc_get_webhook( (int) $input['id'] );
 			if ( ! $webhook ) {
 				return array( 'error' => 'Webhook not found.' );
@@ -681,7 +752,7 @@ function mcp_wc_register_shipping_classes_query(): void {
 			),
 			'additionalProperties' => false,
 		) ),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -752,7 +823,7 @@ function mcp_wc_register_tax_classes_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -800,7 +871,7 @@ function mcp_wc_register_system_status(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -841,9 +912,9 @@ function mcp_wc_register_system_status(): void {
 				$response['pages'] = $pg->get_data();
 			}
 
-			return $response;
+			return mcp_wc_redact_system_paths( $response );
 		},
-		'permission_callback' => 'mcp_wc_settings_permission',
+		'permission_callback' => 'mcp_wc_system_permission',
 		'meta'                => array(
 			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
 		),
@@ -878,7 +949,7 @@ function mcp_wc_register_system_tools_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -891,7 +962,9 @@ function mcp_wc_register_system_tools_query(): void {
 			$tools_data = $controller->get_items( new \WP_REST_Request() );
 			$tools      = array();
 
+			$allowed = mcp_wc_allowed_system_tools();
 			foreach ( $tools_data->get_data() as $tool ) {
+				if ( ! in_array( sanitize_key( $tool['id'] ), $allowed, true ) ) { continue; }
 				$tools[] = array(
 					'id'          => $tool['id'],
 					'name'        => $tool['name'],
@@ -902,7 +975,7 @@ function mcp_wc_register_system_tools_query(): void {
 
 			return array( 'tools' => $tools );
 		},
-		'permission_callback' => 'mcp_wc_settings_permission',
+		'permission_callback' => 'mcp_wc_system_permission',
 		'meta'                => array(
 			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
 		),
@@ -917,9 +990,10 @@ function mcp_wc_register_system_tool_run(): void {
 		'input_schema'        => array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'id' => array( 'type' => 'string', 'description' => 'Tool ID from system-tools-query.' ),
+				'id' => array( 'type' => 'string', 'description' => 'Server-allowlisted tool ID from system-tools-query.' ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/system-tool-run' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -930,7 +1004,7 @@ function mcp_wc_register_system_tool_run(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -939,7 +1013,10 @@ function mcp_wc_register_system_tool_run(): void {
 				require_once WC_ABSPATH . 'includes/rest-api/Controllers/Version3/class-wc-rest-system-status-tools-controller.php';
 			}
 
-			$tool_id = sanitize_text_field( $input['id'] );
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/system-tool-run' );
+			if ( $confirmation ) { return $confirmation; }
+			$tool_id = sanitize_key( $input['id'] );
+			if ( ! in_array( $tool_id, mcp_wc_allowed_system_tools(), true ) ) { return mcp_wc_error( 'mcp_wc_system_tool_not_allowed', 'This system tool is not enabled for MCP execution.' ); }
 
 			if ( ! class_exists( 'WC_REST_System_Status_Tools_Controller' ) ) {
 				require_once WC_ABSPATH . 'includes/rest-api/Controllers/Version3/class-wc-rest-system-status-tools-controller.php';
@@ -961,7 +1038,7 @@ function mcp_wc_register_system_tool_run(): void {
 				'message' => $data['message'] ?? '',
 			);
 		},
-		'permission_callback' => 'mcp_wc_settings_permission',
+		'permission_callback' => 'mcp_wc_system_permission',
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
 		),
@@ -1007,7 +1084,7 @@ function mcp_wc_register_email_settings(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! mcp_wc_settings_permission() ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -1046,5 +1123,3 @@ function mcp_wc_register_email_settings(): void {
 		),
 	) );
 }
-
-

@@ -30,7 +30,10 @@ function mcp_wc_get_order_or_error( int $id, string $action ): array {
 	if ( ! $order ) {
 		return array( 'success' => false, 'message' => 'Order not found with ID: ' . $id );
 	}
-	if ( ! current_user_can( 'edit_shop_orders' ) ) {
+	$allowed = 'delete' === $action
+		? MCP_WC_Ability_Execution_Module::can_delete_order( $id )
+		: MCP_WC_Ability_Execution_Module::can_edit_order( $id );
+	if ( ! $allowed ) {
 		return array( 'success' => false, 'message' => 'You do not have permission to ' . $action . ' orders.' );
 	}
 	return array( 'success' => true, 'order' => $order );
@@ -67,14 +70,14 @@ function mcp_wc_register_orders_query(): void {
 		'output_schema'       => array(
 			'type'       => 'object',
 			'properties' => array(
-				'orders'      => array( 'type' => 'array', 'items' => mcp_wc_order_output_schema() ),
-				'total_pages' => array( 'type' => 'integer' ),
+					'orders'      => array( 'type' => 'array', 'items' => mcp_wc_order_output_schema() ),
+					'total_pages' => array( 'type' => 'integer' ),
 				'page'        => array( 'type' => 'integer' ),
 				'per_page'    => array( 'type' => 'integer' ),
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
 			if ( ! current_user_can( 'edit_shop_orders' ) ) {
 				return array( 'error' => 'Permission denied.' );
 			}
@@ -110,8 +113,17 @@ function mcp_wc_register_orders_query(): void {
 			if ( ! empty( $input['order'] ) ) { $args['order'] = strtoupper( sanitize_text_field( $input['order'] ) ); }
 			if ( ! empty( $input['date_after'] ) ) { $args['date_after'] = sanitize_text_field( $input['date_after'] ); }
 			if ( ! empty( $input['date_before'] ) ) { $args['date_before'] = sanitize_text_field( $input['date_before'] ); }
-			if ( ! empty( $input['modified_after'] ) ) { $args['date_modified'] = sanitize_text_field( $input['modified_after'] ); }
-			if ( ! empty( $input['modified_before'] ) ) { $args['date_modified'] = sanitize_text_field( $input['modified_before'] ); }
+			if ( ! empty( $input['modified_after'] ) || ! empty( $input['modified_before'] ) ) {
+				$after  = ! empty( $input['modified_after'] ) ? mcp_wc_parse_date( $input['modified_after'] ) : null;
+				$before = ! empty( $input['modified_before'] ) ? mcp_wc_parse_date( $input['modified_before'] ) : null;
+				if ( $after && $before ) {
+					$args['date_modified'] = $after->getTimestamp() . '...' . $before->getTimestamp();
+				} elseif ( $after ) {
+					$args['date_modified'] = '>' . $after->getTimestamp();
+				} elseif ( $before ) {
+					$args['date_modified'] = '<' . $before->getTimestamp();
+				}
+			}
 
 			$results = wc_get_orders( $args );
 			$orders  = array();
@@ -126,8 +138,10 @@ function mcp_wc_register_orders_query(): void {
 				'per_page'    => $per_page,
 			);
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_shop_orders' );
+			'permission_callback' => function ( array $input ): bool {
+				return isset( $input['id'] )
+					? MCP_WC_Ability_Execution_Module::can_edit_order( (int) $input['id'] )
+					: current_user_can( 'edit_shop_orders' );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
@@ -147,7 +161,7 @@ function mcp_wc_register_order_create(): void {
 			'properties'           => array(
 				'customer_id'        => array( 'type' => 'integer', 'description' => 'Existing customer/user ID. Use 0 for guest.' ),
 				'status'             => array( 'type' => 'string', 'enum' => mcp_wc_allowed_order_statuses(), 'default' => 'pending' ),
-				'line_items'         => array( 'type' => 'array', 'items' => array(
+					'line_items'         => array( 'type' => 'array', 'minItems' => 1, 'maxItems' => 100, 'items' => array(
 					'type'       => 'object',
 					'properties' => array(
 						'product_id' => array( 'type' => 'integer', 'minimum' => 1 ),
@@ -175,7 +189,7 @@ function mcp_wc_register_order_create(): void {
 				'note'               => array( 'type' => 'string', 'description' => 'Optional order note.' ),
 			'payment_method'     => array( 'type' => 'string' ),
 			'payment_method_title' => array( 'type' => 'string' ),
-			'coupon_lines'        => array( 'type' => 'array', 'items' => array(
+			'coupon_lines'        => array( 'type' => 'array', 'maxItems' => 100, 'items' => array(
 				'type'       => 'object',
 				'properties' => array(
 					'code'   => array( 'type' => 'string', 'description' => 'Coupon code to apply.' ),
@@ -183,7 +197,7 @@ function mcp_wc_register_order_create(): void {
 				'required'   => array( 'code' ),
 				'additionalProperties' => false,
 			), 'description' => 'Coupons to apply to the order.' ),
-			'fee_lines'           => array( 'type' => 'array', 'items' => array(
+			'fee_lines'           => array( 'type' => 'array', 'maxItems' => 100, 'items' => array(
 				'type'       => 'object',
 				'properties' => array(
 					'name'   => array( 'type' => 'string' ),
@@ -193,7 +207,7 @@ function mcp_wc_register_order_create(): void {
 				'required'   => array( 'name', 'total' ),
 				'additionalProperties' => false,
 			), 'description' => 'Fee line items.' ),
-			'shipping_lines'      => array( 'type' => 'array', 'items' => array(
+			'shipping_lines'      => array( 'type' => 'array', 'maxItems' => 100, 'items' => array(
 				'type'       => 'object',
 				'properties' => array(
 					'method_title' => array( 'type' => 'string' ),
@@ -204,7 +218,7 @@ function mcp_wc_register_order_create(): void {
 				'additionalProperties' => false,
 			), 'description' => 'Shipping line items.' ),
 			'customer_note'       => array( 'type' => 'string', 'description' => 'Note from customer, visible on the order.' ),
-			'meta_data'           => array( 'type' => 'array', 'items' => array(
+				'meta_data'           => array( 'type' => 'array', 'items' => array(
 				'type'       => 'object',
 				'properties' => array(
 					'key'   => array( 'type' => 'string' ),
@@ -212,9 +226,10 @@ function mcp_wc_register_order_create(): void {
 				),
 				'required'   => array( 'key', 'value' ),
 				'additionalProperties' => false,
-			), 'description' => 'Custom meta data for extensions.' ),
-		),
-		'required'             => array( 'line_items' ),
+				), 'description' => 'Custom meta data for extensions.' ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/order-create' ),
+			),
+			'required'             => array( 'line_items', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -224,106 +239,7 @@ function mcp_wc_register_order_create(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! current_user_can( 'edit_shop_orders' ) ) {
-				return array( 'error' => 'Permission denied.' );
-			}
-
-			$order = wc_create_order( array(
-				'customer_id' => isset( $input['customer_id'] ) ? (int) $input['customer_id'] : 0,
-				'status'      => $input['status'] ?? 'pending',
-			) );
-
-			if ( is_wp_error( $order ) ) {
-				return array( 'error' => $order->get_error_message() );
-			}
-
-			if ( isset( $input['line_items'] ) && is_array( $input['line_items'] ) ) {
-				foreach ( $input['line_items'] as $item ) {
-					$product_id   = (int) $item['product_id'];
-					$variation_id = isset( $item['variation_id'] ) ? (int) $item['variation_id'] : 0;
-					$quantity     = isset( $item['quantity'] ) ? max( 1, (int) $item['quantity'] ) : 1;
-
-					if ( $variation_id ) {
-						$product = wc_get_product( $variation_id );
-					} else {
-						$product = wc_get_product( $product_id );
-					}
-					if ( ! $product ) { continue; }
-
-					$order->add_product( $product, $quantity );
-				}
-			}
-
-			if ( isset( $input['billing'] ) && is_array( $input['billing'] ) ) {
-				foreach ( $input['billing'] as $key => $value ) {
-					if ( is_string( $value ) ) {
-						$order->{"set_billing_{$key}"}( sanitize_text_field( $value ) );
-					}
-				}
-			}
-			if ( isset( $input['shipping'] ) && is_array( $input['shipping'] ) ) {
-				foreach ( $input['shipping'] as $key => $value ) {
-					if ( is_string( $value ) ) {
-						$order->{"set_shipping_{$key}"}( sanitize_text_field( $value ) );
-					}
-				}
-			}
-			if ( ! empty( $input['payment_method'] ) ) {
-				$order->set_payment_method( sanitize_text_field( $input['payment_method'] ) );
-			}
-		if ( ! empty( $input['payment_method_title'] ) ) {
-			$order->set_payment_method_title( sanitize_text_field( $input['payment_method_title'] ) );
-		}
-
-		if ( isset( $input['coupon_lines'] ) && is_array( $input['coupon_lines'] ) ) {
-			foreach ( $input['coupon_lines'] as $coupon ) {
-				$order->apply_coupon( sanitize_text_field( $coupon['code'] ) );
-			}
-		}
-
-		if ( isset( $input['fee_lines'] ) && is_array( $input['fee_lines'] ) ) {
-			foreach ( $input['fee_lines'] as $fee ) {
-				$item = new \WC_Order_Item_Fee();
-				$item->set_name( sanitize_text_field( $fee['name'] ) );
-				$item->set_total( sanitize_text_field( $fee['total'] ) );
-				if ( ! empty( $fee['tax_class'] ) ) {
-					$item->set_tax_class( sanitize_text_field( $fee['tax_class'] ) );
-				}
-				$order->add_item( $item );
-			}
-		}
-
-		if ( isset( $input['shipping_lines'] ) && is_array( $input['shipping_lines'] ) ) {
-			foreach ( $input['shipping_lines'] as $shipping ) {
-				$item = new \WC_Order_Item_Shipping();
-				$item->set_method_title( sanitize_text_field( $shipping['method_title'] ) );
-				$item->set_method_id( ! empty( $shipping['method_id'] ) ? sanitize_text_field( $shipping['method_id'] ) : '' );
-				$item->set_total( sanitize_text_field( $shipping['total'] ) );
-				$order->add_item( $item );
-			}
-		}
-
-		if ( isset( $input['meta_data'] ) && is_array( $input['meta_data'] ) ) {
-			foreach ( $input['meta_data'] as $meta ) {
-				$order->add_meta_data( sanitize_text_field( $meta['key'] ), sanitize_text_field( $meta['value'] ), true );
-			}
-			$order->save_meta_data();
-		}
-
-		if ( isset( $input['customer_note'] ) ) {
-			$order->set_customer_note( sanitize_textarea_field( $input['customer_note'] ) );
-		}
-
-		$order->calculate_totals();
-			$order->save();
-
-			if ( ! empty( $input['note'] ) ) {
-				$order->add_order_note( sanitize_textarea_field( $input['note'] ) );
-			}
-
-			return array( 'order' => mcp_wc_format_order( $order, true ) );
-		},
+		'execute_callback'    => array( MCP_WC_Order_Lifecycle_Module::class, 'create' ),
 		'permission_callback' => function (): bool {
 			return current_user_can( 'edit_shop_orders' );
 		},
@@ -338,13 +254,13 @@ function mcp_wc_register_order_create(): void {
 function mcp_wc_register_order_update_status(): void {
 	mcp_wc_register_ability( 'woocommerce-mcp/order-update-status', array(
 		'label'               => 'Update order status',
-		'description'         => 'Update an order status with optional note, or update billing/shipping address. Use status \'note-only\' to add a note without changing the status.',
+		'description'         => 'Update an order status, billing/shipping address, and optional order note.',
 		'category'            => 'site',
 		'input_schema'        => array(
 			'type'                 => 'object',
 			'properties'           => array(
 				'id'            => array( 'type' => 'integer', 'minimum' => 1 ),
-				'status'        => array( 'type' => 'string', 'description' => 'New order status. Use "note-only" to add a note without changing the status.' ),
+				'status'        => array( 'type' => 'string', 'enum' => mcp_wc_allowed_order_statuses(), 'description' => 'Optional new registered Order status.' ),
 				'note'          => array( 'type' => 'string', 'description' => 'Optional status change note.' ),
 				'customer_note' => array( 'type' => 'boolean', 'default' => false, 'description' => 'Make the note visible to the customer.' ),
 				'billing'       => array( 'type' => 'object', 'properties' => array(
@@ -362,8 +278,9 @@ function mcp_wc_register_order_update_status(): void {
 					'state'      => array( 'type' => 'string' ), 'postcode'   => array( 'type' => 'string' ),
 					'country'    => array( 'type' => 'string' ),
 				), 'additionalProperties' => false, 'description' => 'Update shipping address fields.' ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/order-update-status' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -374,56 +291,9 @@ function mcp_wc_register_order_update_status(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			$result = mcp_wc_get_order_or_error( (int) $input['id'], 'update status of' );
-			if ( ! $result['success'] ) { return $result; }
-
-			$order  = $result['order'];
-			$note   = isset( $input['note'] ) ? sanitize_textarea_field( $input['note'] ) : '';
-
-			if ( isset( $input['status'] ) && 'note-only' === $input['status'] ) {
-				if ( '' === $note ) {
-					return array( 'success' => false, 'message' => 'A note is required when using status "note-only".' );
-				}
-				$customer_note = (bool) ( $input['customer_note'] ?? false );
-				$note_id       = $order->add_order_note( $note, $customer_note ? 1 : 0, false );
-				return array( 'note_id' => $note_id, 'order' => mcp_wc_format_order( $order, true ) );
-			}
-
-			if ( ! isset( $input['status'] ) ) {
-				return array( 'success' => false, 'message' => 'Status is required (or use "note-only" to add a note without changing status).' );
-			}
-
-			$status = sanitize_text_field( $input['status'] );
-			$order->update_status( $status, '' !== $note ? $note : '' );
-
-			if ( isset( $input['billing'] ) && is_array( $input['billing'] ) ) {
-				foreach ( $input['billing'] as $key => $value ) {
-					if ( is_string( $value ) ) {
-						$method = "set_billing_{$key}";
-						if ( method_exists( $order, $method ) ) {
-							$order->$method( sanitize_text_field( $value ) );
-						}
-					}
-				}
-				$order->save();
-			}
-			if ( isset( $input['shipping'] ) && is_array( $input['shipping'] ) ) {
-				foreach ( $input['shipping'] as $key => $value ) {
-					if ( is_string( $value ) ) {
-						$method = "set_shipping_{$key}";
-						if ( method_exists( $order, $method ) ) {
-							$order->$method( sanitize_text_field( $value ) );
-						}
-					}
-				}
-				$order->save();
-			}
-
-			return array( 'order' => mcp_wc_format_order( $order, true ) );
-		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_shop_orders' );
+		'execute_callback'    => array( MCP_WC_Order_Lifecycle_Module::class, 'update' ),
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['id'] ) && MCP_WC_Ability_Execution_Module::can_edit_order( (int) $input['id'] );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
@@ -443,8 +313,9 @@ function mcp_wc_register_order_delete(): void {
 			'properties'           => array(
 				'id'    => array( 'type' => 'integer', 'minimum' => 1 ),
 				'force' => array( 'type' => 'boolean', 'default' => false ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/order-delete' ),
 			),
-			'required'             => array( 'id' ),
+			'required'             => array( 'id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -455,15 +326,17 @@ function mcp_wc_register_order_delete(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
+		'execute_callback'    => function ( array $input ) {
+			$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/order-delete' );
+			if ( $confirmation ) { return $confirmation; }
 			$result = mcp_wc_get_order_or_error( (int) $input['id'], 'delete' );
 			if ( ! $result['success'] ) { return $result; }
 
 			$success = $result['order']->delete( (bool) ( $input['force'] ?? false ) );
 			return array( 'deleted' => (bool) $success, 'id' => (int) $input['id'] );
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_shop_orders' );
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['id'] ) && MCP_WC_Ability_Execution_Module::can_delete_order( (int) $input['id'] );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => true ),
@@ -537,19 +410,15 @@ function mcp_wc_register_order_refunds_query(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! current_user_can( 'edit_shop_orders' ) ) {
-				return array( 'error' => 'Permission denied.' );
-			}
-
-			$order = wc_get_order( (int) $input['order_id'] );
+			'execute_callback'    => function ( array $input ) {
+				$order = wc_get_order( (int) $input['order_id'] );
 			if ( ! $order ) {
 				return array( 'error' => 'Order not found.' );
 			}
 
 			if ( isset( $input['refund_id'] ) ) {
 				$refund = wc_get_order( (int) $input['refund_id'] );
-				if ( ! $refund || 'shop_order_refund' !== $refund->get_type() ) {
+				if ( ! $refund || 'shop_order_refund' !== $refund->get_type() || (int) $refund->get_parent_id() !== (int) $order->get_id() ) {
 					return array( 'refunds' => array() );
 				}
 				return array( 'refunds' => array( mcp_wc_format_refund( $refund ) ) );
@@ -561,8 +430,8 @@ function mcp_wc_register_order_refunds_query(): void {
 			}
 			return array( 'refunds' => $refunds );
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_shop_orders' );
+			'permission_callback' => function ( array $input ): bool {
+				return isset( $input['order_id'] ) && MCP_WC_Ability_Execution_Module::can_edit_order( (int) $input['order_id'] );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
@@ -583,7 +452,7 @@ function mcp_wc_register_order_refund_create(): void {
 				'order_id' => array( 'type' => 'integer', 'minimum' => 1 ),
 				'amount'   => array( 'type' => 'string', 'description' => 'Refund amount. If omitted, refunds all line items fully.' ),
 				'reason'   => array( 'type' => 'string', 'description' => 'Reason for the refund.' ),
-				'line_items' => array( 'type' => 'array', 'items' => array(
+				'line_items' => array( 'type' => 'array', 'maxItems' => 100, 'items' => array(
 					'type'       => 'object',
 					'properties' => array(
 						'id'       => array( 'type' => 'integer', 'description' => 'Order line item ID.' ),
@@ -593,8 +462,11 @@ function mcp_wc_register_order_refund_create(): void {
 					'required'   => array( 'id' ),
 					'additionalProperties' => false,
 				) ),
+				'restock_items' => array( 'type' => 'boolean', 'default' => false, 'description' => 'Restore refunded product quantities to stock.' ),
+				'refund_payment' => array( 'type' => 'boolean', 'default' => false, 'description' => 'Attempt the refund through the original payment gateway.' ),
+				'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/order-refund-create' ),
 			),
-			'required'             => array( 'order_id' ),
+			'required'             => array( 'order_id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -604,43 +476,11 @@ function mcp_wc_register_order_refund_create(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! current_user_can( 'edit_shop_orders' ) ) {
-				return array( 'error' => 'Permission denied.' );
-			}
-
-			$order = wc_get_order( (int) $input['order_id'] );
-			if ( ! $order ) {
-				return array( 'error' => 'Order not found.' );
-			}
-
-			$args = array();
-			if ( isset( $input['amount'] ) ) {
-				$args['amount'] = (float) $input['amount'];
-			}
-			if ( isset( $input['reason'] ) ) {
-				$args['reason'] = sanitize_text_field( $input['reason'] );
-			}
-			if ( isset( $input['line_items'] ) && is_array( $input['line_items'] ) ) {
-				$args['line_items'] = array();
-				foreach ( $input['line_items'] as $item ) {
-					$line_item = array( 'refund_total' => 0, 'qty' => isset( $item['quantity'] ) ? (int) $item['quantity'] : 1 );
-					if ( isset( $item['total'] ) ) {
-						$line_item['refund_total'] = (float) $item['total'];
-					}
-					$args['line_items'][ (int) $item['id'] ] = $line_item;
-				}
-			}
-
-			$refund = wc_create_refund( $args );
-			if ( is_wp_error( $refund ) ) {
-				return array( 'error' => $refund->get_error_message() );
-			}
-
-			return array( 'refund' => mcp_wc_format_refund( $refund ) );
-		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_shop_orders' );
+		'execute_callback'    => array( MCP_WC_Order_Lifecycle_Module::class, 'create_refund' ),
+		'permission_callback' => function ( array $input ): bool {
+			return isset( $input['order_id'] )
+				&& MCP_WC_Ability_Execution_Module::can_edit_order( (int) $input['order_id'] )
+				&& current_user_can( 'manage_woocommerce' );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
@@ -680,18 +520,14 @@ function mcp_wc_register_order_notes_query(): void {
 					),
 					'additionalProperties' => false,
 				) ),
-				'total_pages' => array( 'type' => 'integer' ),
+					'has_more'    => array( 'type' => 'boolean' ),
 				'page'        => array( 'type' => 'integer' ),
 				'per_page'    => array( 'type' => 'integer' ),
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			if ( ! current_user_can( 'edit_shop_orders' ) ) {
-				return array( 'error' => 'Permission denied.' );
-			}
-
-			$order = wc_get_order( (int) $input['order_id'] );
+			'execute_callback'    => function ( array $input ) {
+				$order = wc_get_order( (int) $input['order_id'] );
 			if ( ! $order ) {
 				return array( 'error' => 'Order not found.' );
 			}
@@ -700,19 +536,14 @@ function mcp_wc_register_order_notes_query(): void {
 			$args = array(
 				'order_id' => $order->get_id(),
 				'type'     => 'any' === $type ? 'order_note' : ( 'customer' === $type ? 'customer' : 'internal' ),
-				'limit'    => min( 100, max( 1, (int) ( $input['per_page'] ?? 25 ) ) ),
+					'limit'    => min( 100, max( 1, (int) ( $input['per_page'] ?? 25 ) ) ) + 1,
 				'offset'   => ( (int) ( $input['page'] ?? 1 ) - 1 ) * min( 100, max( 1, (int) ( $input['per_page'] ?? 25 ) ) ),
 			);
 
-			if ( 'any' === $type ) {
-				$notes = wc_get_order_notes( $args );
-				$total = count( wc_get_order_notes( array( 'order_id' => $order->get_id(), 'type' => 'order_note', 'limit' => 9999 ) ) );
-			} else {
-				$notes = wc_get_order_notes( $args );
-				$total = count( wc_get_order_notes( array( 'order_id' => $order->get_id(), 'type' => $args['type'], 'limit' => 9999 ) ) );
-			}
-
-			$per_page = (int) ( $input['per_page'] ?? 25 );
+				$per_page = min( 100, max( 1, (int) ( $input['per_page'] ?? 25 ) ) );
+				$notes     = wc_get_order_notes( $args );
+				$has_more  = count( $notes ) > $per_page;
+				$notes     = array_slice( $notes, 0, $per_page );
 			$items = array();
 			foreach ( $notes as $note ) {
 				$items[] = array(
@@ -726,13 +557,13 @@ function mcp_wc_register_order_notes_query(): void {
 
 			return array(
 				'notes'       => $items,
-				'total_pages' => max( 1, (int) ceil( $total / $per_page ) ),
+					'has_more'    => $has_more,
 				'page'        => (int) ( $input['page'] ?? 1 ),
 				'per_page'    => $per_page,
 			);
 		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_shop_orders' );
+			'permission_callback' => function ( array $input ): bool {
+				return isset( $input['order_id'] ) && MCP_WC_Ability_Execution_Module::can_edit_order( (int) $input['order_id'] );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => true, 'destructive' => false, 'idempotent' => true ),
@@ -749,9 +580,9 @@ function mcp_wc_register_order_items_update(): void {
 		'category'            => 'site',
 		'input_schema'        => array(
 			'type'                 => 'object',
-			'properties'           => array(
-				'order_id'    => array( 'type' => 'integer', 'minimum' => 1 ),
-				'add_items'   => array( 'type' => 'array', 'items' => array(
+				'properties'           => array(
+					'order_id'    => array( 'type' => 'integer', 'minimum' => 1 ),
+					'add_items'   => array( 'type' => 'array', 'maxItems' => 100, 'items' => array(
 					'type'       => 'object',
 					'properties' => array(
 						'product_id'   => array( 'type' => 'integer', 'minimum' => 1 ),
@@ -761,9 +592,10 @@ function mcp_wc_register_order_items_update(): void {
 					'required'   => array( 'product_id' ),
 					'additionalProperties' => false,
 				) ),
-				'remove_items' => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ), 'description' => 'Line item IDs to remove.' ),
-			),
-			'required'             => array( 'order_id' ),
+					'remove_items' => array( 'type' => 'array', 'maxItems' => 100, 'items' => array( 'type' => 'integer', 'minimum' => 1 ), 'description' => 'Line item IDs to remove.' ),
+					'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/order-items-update' ),
+				),
+				'required'             => array( 'order_id', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -773,38 +605,9 @@ function mcp_wc_register_order_items_update(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			$result = mcp_wc_get_order_or_error( (int) $input['order_id'], 'update items of' );
-			if ( ! $result['success'] ) { return $result; }
-
-			$order = $result['order'];
-
-			if ( isset( $input['remove_items'] ) && is_array( $input['remove_items'] ) ) {
-				foreach ( $input['remove_items'] as $item_id ) {
-					$order->remove_item( (int) $item_id );
-				}
-			}
-
-			if ( isset( $input['add_items'] ) && is_array( $input['add_items'] ) ) {
-				foreach ( $input['add_items'] as $item ) {
-					$product_id   = (int) $item['product_id'];
-					$variation_id = isset( $item['variation_id'] ) ? (int) $item['variation_id'] : 0;
-					$quantity     = isset( $item['quantity'] ) ? max( 1, (int) $item['quantity'] ) : 1;
-
-					$product = $variation_id ? wc_get_product( $variation_id ) : wc_get_product( $product_id );
-					if ( ! $product ) { continue; }
-
-					$order->add_product( $product, $quantity );
-				}
-			}
-
-			$order->calculate_totals();
-			$order->save();
-
-			return array( 'order' => mcp_wc_format_order( $order, true ) );
-		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_shop_orders' );
+			'execute_callback'    => array( MCP_WC_Order_Lifecycle_Module::class, 'update_items' ),
+			'permission_callback' => function ( array $input ): bool {
+				return isset( $input['order_id'] ) && MCP_WC_Ability_Execution_Module::can_edit_order( (int) $input['order_id'] );
 		},
 		'meta'                => array(
 			'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false ),
@@ -821,11 +624,12 @@ function mcp_wc_register_order_resend_email(): void {
 		'category'            => 'site',
 		'input_schema'        => array(
 			'type'                 => 'object',
-			'properties'           => array(
-				'order_id' => array( 'type' => 'integer', 'minimum' => 1 ),
-				'type'     => array( 'type' => 'string', 'description' => 'Email type. Common: customer_processing_order, customer_completed_order, customer_invoice, customer_refunded_order, customer_note, new_order.' ),
-			),
-			'required'             => array( 'order_id', 'type' ),
+				'properties'           => array(
+					'order_id' => array( 'type' => 'integer', 'minimum' => 1 ),
+					'type'     => array( 'type' => 'string', 'description' => 'Email type. Common: customer_processing_order, customer_completed_order, customer_invoice, customer_refunded_order, customer_note, new_order.' ),
+					'confirm_dangerous_action' => MCP_WC_Ability_Execution_Module::confirmation_schema( 'woocommerce-mcp/order-resend-email' ),
+				),
+				'required'             => array( 'order_id', 'type', 'confirm_dangerous_action' ),
 			'additionalProperties' => false,
 		),
 		'output_schema'       => array(
@@ -836,8 +640,10 @@ function mcp_wc_register_order_resend_email(): void {
 			),
 			'additionalProperties' => false,
 		),
-		'execute_callback'    => function ( array $input ): array {
-			$result = mcp_wc_get_order_or_error( (int) $input['order_id'], 'send emails for' );
+			'execute_callback'    => function ( array $input ) {
+				$confirmation = MCP_WC_Ability_Execution_Module::require_confirmation( $input, 'woocommerce-mcp/order-resend-email' );
+				if ( $confirmation ) { return $confirmation; }
+				$result = mcp_wc_get_order_or_error( (int) $input['order_id'], 'send emails for' );
 			if ( ! $result['success'] ) { return $result; }
 
 			$order = $result['order'];
@@ -859,16 +665,13 @@ function mcp_wc_register_order_resend_email(): void {
 				}
 			}
 
-			return array(
-				'success' => false,
-				'message' => sprintf( 'Email type "%s" not found. Available: %s', $type, implode( ', ', array_map( function( $e ) { return $e->id; }, $emails ) ) ),
-			);
-		},
-		'permission_callback' => function (): bool {
-			return current_user_can( 'edit_shop_orders' );
+				return mcp_wc_error( 'mcp_wc_email_type_not_found', sprintf( 'Email type "%s" was not found.', $type ) );
+			},
+			'permission_callback' => function ( array $input ): bool {
+				return isset( $input['order_id'] ) && MCP_WC_Ability_Execution_Module::can_edit_order( (int) $input['order_id'] );
 		},
 		'meta'                => array(
-			'annotations' => array( 'readonly' => false, 'destructive' => false, 'idempotent' => false ),
+				'annotations' => array( 'readonly' => false, 'destructive' => true, 'idempotent' => false, 'externalAction' => true ),
 		),
 	) );
 }
